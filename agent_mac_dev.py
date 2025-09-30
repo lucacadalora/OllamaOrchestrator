@@ -10,6 +10,7 @@ import hmac
 import hashlib
 import json
 import sys
+import threading
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -188,6 +189,9 @@ def poll_for_inference_requests(token):
                 
                 try:
                     full_response = ""
+                    chunk_buffer = []  # Buffer chunks to reduce HTTP calls
+                    buffer_size = 10  # Send every 10 chunks to reduce overhead
+                    
                     with urlopen(ollama_req, timeout=300) as ollama_response:
                         # Stream tokens from Ollama
                         for line in ollama_response:
@@ -195,9 +199,14 @@ def poll_for_inference_requests(token):
                                 chunk = json.loads(line.decode())
                                 text_chunk = chunk.get("response", "")
                                 full_response += text_chunk
+                                chunk_buffer.append(text_chunk)
                                 
-                                # Send chunk immediately for real-time display
-                                submit_inference_chunk(token, request_id, text_chunk, chunk.get("done", False))
+                                # Send chunks in batches to reduce HTTP overhead
+                                if len(chunk_buffer) >= buffer_size or chunk.get("done", False):
+                                    combined_chunk = "".join(chunk_buffer)
+                                    if combined_chunk:  # Only send if we have content
+                                        submit_inference_chunk(token, request_id, combined_chunk, chunk.get("done", False))
+                                    chunk_buffer = []
                         
                         # Send final complete response
                         submit_inference_response(token, request_id, full_response)
@@ -215,7 +224,7 @@ def poll_for_inference_requests(token):
         log(f"✗ Poll error: {e}", RED)
 
 def submit_inference_chunk(token, request_id, chunk, done=False):
-    """Submit a streaming chunk back to console"""
+    """Submit a streaming chunk back to console via HTTP (fallback method)"""
     data = {
         "id": request_id,
         "chunk": chunk,

@@ -6,6 +6,7 @@ import { requireNodeAuth, generateNodeSecret } from "./security";
 import { insertNodeSchema, heartbeatSchema, insertReceiptSchema, RuntimeEnum, StatusEnum, loginSchema } from "@shared/schema";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import { ReceiptGenerator } from "./receiptGenerator";
 import fs from "fs";
 import path from "path";
 
@@ -673,9 +674,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Inference routing endpoint - Queue-based system (public endpoint)
-  app.post("/api/v1/inference/chat", async (req, res) => {
+  app.post("/api/v1/inference/chat", requireAuth, async (req, res) => {
     try {
       const { model, messages } = req.body;
+      const userId = req.session.userId!;
       
       if (!model || !messages) {
         return res.status(400).json({ error: "Model and messages required" });
@@ -697,8 +699,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "No nodes available with this model" });
       }
       
-      // Create inference request in queue and return immediately
-      const request = await storage.createInferenceRequest(model, messages);
+      // Create inference request in queue with user ID
+      const request = await storage.createInferenceRequest(model, messages, userId);
       
       // Return request ID for frontend to poll
       res.json({
@@ -771,12 +773,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req, res) => {
       try {
         const { id, status, response, error } = req.body;
+        const nodeId = req.nodeId!;
         
         if (!id || !status) {
           return res.status(400).json({ error: "ID and status required" });
         }
         
         await storage.updateRequestStatus(id, status, response, error);
+        
+        // If task completed successfully, generate a receipt
+        if (status === "completed" && response) {
+          const request = await storage.getRequestById(id);
+          if (request && request.userId) {
+            const startTime = new Date(request.createdAt!).getTime();
+            const endTime = new Date().getTime();
+            const processingTime = endTime - startTime;
+            
+            // Estimate token count (rough approximation)
+            const tokenCount = Math.ceil(response.length / 4);
+            
+            await ReceiptGenerator.createReceipt(
+              request.userId,
+              id,
+              nodeId,
+              request.model,
+              request.messages as any[],
+              response,
+              processingTime,
+              tokenCount
+            );
+          }
+        }
+        
         res.json({ success: true });
         
       } catch (error) {
@@ -793,6 +821,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req, res) => {
       try {
         const { id, chunk, done } = req.body;
+        const nodeId = req.nodeId!;
         
         if (!id) {
           return res.status(400).json({ error: "Request ID required" });
@@ -824,6 +853,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Clean up request mapping when streaming is complete
             if (done) {
               wsConnections.delete(id);
+              
+              // Generate receipt when streaming is complete
+              if (request.userId) {
+                const startTime = new Date(request.createdAt!).getTime();
+                const endTime = new Date().getTime();
+                const processingTime = endTime - startTime;
+                
+                // Estimate token count (rough approximation)
+                const tokenCount = Math.ceil(newResponse.length / 4);
+                
+                await ReceiptGenerator.createReceipt(
+                  request.userId,
+                  id,
+                  nodeId,
+                  request.model,
+                  request.messages as any[],
+                  newResponse,
+                  processingTime,
+                  tokenCount
+                );
+              }
             }
           }
         }

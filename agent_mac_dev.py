@@ -44,7 +44,8 @@ def check_ollama_ready():
         with urlopen(req, timeout=2) as response:
             data = json.loads(response.read().decode())
             models = data.get("models", [])
-            model_names = [m.get("name", "").split(":")[0] for m in models] if models else []
+            # Keep full model names exactly as Ollama reports them (e.g. "llama3.2:latest", "gemma2:2b")
+            model_names = [m.get("name", "") for m in models] if models else []
             return len(models) > 0, len(models), model_names
     except Exception:
         return False, 0, []

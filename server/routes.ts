@@ -893,17 +893,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
   
+  // Store agent WebSocket connections by request ID
+  const agentConnections = new Map<string, WebSocket>();
+  
   // WebSocket connection handler
   wss.on("connection", (ws, req) => {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const sessionId = url.searchParams.get("session");
+    const nodeId = url.searchParams.get("nodeId");
+    const nodeToken = url.searchParams.get("token");
     
+    // Agent connection (for streaming inference responses)
+    if (nodeId && nodeToken) {
+      console.log(`Agent WebSocket connected: ${nodeId}`);
+      
+      ws.on("message", async (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+          
+          if (message.type === "stream_chunk") {
+            // Forward chunk to frontend WebSocket if connected
+            const frontendWs = activeConnections.get(message.requestId);
+            if (frontendWs && frontendWs.readyState === WebSocket.OPEN) {
+              frontendWs.send(JSON.stringify({
+                type: "chunk",
+                requestId: message.requestId,
+                chunk: message.chunk,
+                done: message.done
+              }));
+            }
+          }
+        } catch (error) {
+          console.error("Agent WebSocket message error:", error);
+        }
+      });
+      
+      ws.on("close", () => {
+        console.log(`Agent WebSocket disconnected: ${nodeId}`);
+      });
+      
+      return;
+    }
+    
+    // Frontend connection (for receiving inference responses)
     if (!sessionId) {
       ws.close(1008, "Session ID required");
       return;
     }
     
-    console.log(`WebSocket connected: ${sessionId}`);
+    console.log(`Frontend WebSocket connected: ${sessionId}`);
     activeConnections.set(sessionId, ws);
     
     ws.on("message", async (data) => {

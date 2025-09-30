@@ -227,35 +227,44 @@ def poll_for_inference_requests(token):
     except Exception as e:
         log(f"✗ Poll error: {e}", RED)
 
+def submit_inference_chunk_async(token, request_id, chunk, done=False):
+    """Submit a streaming chunk in a background thread to avoid blocking"""
+    def send_chunk():
+        data = {
+            "id": request_id,
+            "chunk": chunk,
+            "done": done
+        }
+        
+        body = json.dumps(data).encode('utf-8')
+        timestamp = str(int(time.time()))
+        signature = calculate_hmac(token, body, timestamp)
+        
+        req = Request(
+            f"{API_BASE}/v1/inference/stream",
+            data=body,
+            headers={
+                'Content-Type': 'application/json',
+                'X-Node-Id': NODE_ID,
+                'X-Node-Ts': timestamp,
+                'X-Node-Auth': signature
+            },
+            method='POST'
+        )
+        
+        try:
+            with urlopen(req, timeout=5) as response:
+                pass  # Just send the chunk, no need to wait
+        except Exception as e:
+            pass  # Silently ignore chunk submission errors
+    
+    # Send chunk in background thread to not block Ollama streaming
+    thread = threading.Thread(target=send_chunk, daemon=True)
+    thread.start()
+
 def submit_inference_chunk(token, request_id, chunk, done=False):
-    """Submit a streaming chunk back to console via HTTP (fallback method)"""
-    data = {
-        "id": request_id,
-        "chunk": chunk,
-        "done": done
-    }
-    
-    body = json.dumps(data).encode('utf-8')
-    timestamp = str(int(time.time()))
-    signature = calculate_hmac(token, body, timestamp)
-    
-    req = Request(
-        f"{API_BASE}/v1/inference/stream",
-        data=body,
-        headers={
-            'Content-Type': 'application/json',
-            'X-Node-Id': NODE_ID,
-            'X-Node-Ts': timestamp,
-            'X-Node-Auth': signature
-        },
-        method='POST'
-    )
-    
-    try:
-        with urlopen(req, timeout=5) as response:
-            pass  # Just send the chunk, no need to wait
-    except Exception as e:
-        pass  # Silently ignore chunk submission errors
+    """Submit a streaming chunk back to console (wrapper for async version)"""
+    submit_inference_chunk_async(token, request_id, chunk, done)
 
 def submit_inference_response(token, request_id, response, error=None):
     """Submit inference response back to console"""

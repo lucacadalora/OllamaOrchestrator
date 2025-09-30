@@ -36,11 +36,17 @@ export function useWebSocketChat() {
         const data = JSON.parse(event.data);
 
         if (data.type === "chunk" || data.type === "stream_chunk") {
+          console.log(`[Frontend WS] Received chunk: "${data.chunk?.substring(0, 20)}...", done=${data.done}, requestId=${data.requestId}`);
           // Append chunk to current response
-          setCurrentResponse(prev => prev + data.chunk);
+          setCurrentResponse(prev => {
+            const newResponse = prev + data.chunk;
+            console.log(`[Frontend WS] Updated response length: ${prev.length} -> ${newResponse.length}`);
+            return newResponse;
+          });
           setIsStreaming(!data.done);
           
           if (data.done) {
+            console.log(`[Frontend WS] Stream complete, resetting`);
             setCurrentResponse("");
             setIsStreaming(false);
           }

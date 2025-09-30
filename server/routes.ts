@@ -813,6 +813,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const wsConnections = (app as any).wsConnections as Map<string, WebSocket>;
           const ws = wsConnections.get(id);
           
+          console.log(`[HTTP Stream] Request ${id}: chunk="${chunk?.substring(0, 20)}...", hasWS=${!!ws}, wsReady=${ws?.readyState === WebSocket.OPEN}, totalConnections=${wsConnections.size}`);
+          
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
               type: "chunk",
@@ -820,6 +822,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
               chunk,
               done
             }));
+            console.log(`[HTTP Stream] Sent chunk to frontend for request ${id}`);
+          } else {
+            console.log(`[HTTP Stream] No valid WebSocket for request ${id}`);
           }
         }
         
@@ -961,7 +966,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }));
           
           // Map this specific request to THIS WebSocket connection only
+          console.log(`[WS Request] Mapping request ${request.id} to session ${sessionId}`);
           requestConnections.set(request.id, ws);
+          console.log(`[WS Request] Total request mappings: ${requestConnections.size}`);
         }
       } catch (error) {
         console.error("WebSocket message error:", error);

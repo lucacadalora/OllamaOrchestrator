@@ -5,6 +5,9 @@ import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
 
+// Trust proxy for Replit deployments (needed for secure cookies behind proxy)
+app.set('trust proxy', 1);
+
 // Session configuration
 app.use(
   session({

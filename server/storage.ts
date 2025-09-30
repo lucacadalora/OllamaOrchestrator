@@ -1,14 +1,19 @@
-import { nodes, nodeSecrets, receipts, earnings, type Node, type InsertNode, type NodeSecret, type Receipt, type InsertReceipt, type Earning } from "@shared/schema";
+import { nodes, nodeSecrets, receipts, earnings, users, type Node, type InsertNode, type NodeSecret, type Receipt, type InsertReceipt, type Earning, type User, type InsertUser } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, gte } from "drizzle-orm";
 
 export interface IStorage {
+  // User operations
+  createUser(user: InsertUser & { role?: string }): Promise<User>;
+  getUserByUsername(username: string): Promise<User | undefined>;
+  getUserById(id: string): Promise<User | undefined>;
+  
   // Node operations
-  createNode(node: InsertNode): Promise<Node>;
+  createNode(node: InsertNode & { userId?: string }): Promise<Node>;
   getNode(id: string): Promise<Node | undefined>;
   updateNodeStatus(id: string, status: string): Promise<void>;
   updateNodeHeartbeat(id: string): Promise<void>;
-  listNodes(filters?: { status?: string; region?: string; runtime?: string }): Promise<Node[]>;
+  listNodes(filters?: { status?: string; region?: string; runtime?: string; userId?: string }): Promise<Node[]>;
   
   // Node secrets
   createNodeSecret(nodeId: string, secret: string): Promise<void>;
@@ -28,7 +33,31 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
-  async createNode(insertNode: InsertNode): Promise<Node> {
+  async createUser(insertUser: InsertUser & { role?: string }): Promise<User> {
+    const [user] = await db
+      .insert(users)
+      .values(insertUser)
+      .returning();
+    return user;
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.username, username));
+    return user || undefined;
+  }
+
+  async getUserById(id: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, id));
+    return user || undefined;
+  }
+
+  async createNode(insertNode: InsertNode & { userId?: string }): Promise<Node> {
     const [node] = await db
       .insert(nodes)
       .values(insertNode)
@@ -58,7 +87,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(nodes.id, id));
   }
 
-  async listNodes(filters?: { status?: string; region?: string; runtime?: string }): Promise<Node[]> {
+  async listNodes(filters?: { status?: string; region?: string; runtime?: string; userId?: string }): Promise<Node[]> {
     const conditions = [];
     if (filters?.status) {
       conditions.push(eq(nodes.status, filters.status));
@@ -68,6 +97,9 @@ export class DatabaseStorage implements IStorage {
     }
     if (filters?.runtime) {
       conditions.push(eq(nodes.runtime, filters.runtime));
+    }
+    if (filters?.userId) {
+      conditions.push(eq(nodes.userId, filters.userId));
     }
     
     if (conditions.length > 0) {

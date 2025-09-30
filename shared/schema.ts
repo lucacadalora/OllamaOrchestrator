@@ -7,10 +7,13 @@ export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
   password: text("password").notNull(),
+  role: text("role").notNull().default("operator"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
 export const nodes = pgTable("nodes", {
   id: text("id").primaryKey(),
+  userId: varchar("user_id").references(() => users.id),
   region: text("region").notNull(),
   runtime: text("runtime").notNull(),
   status: text("status").notNull().default("pending"),
@@ -79,9 +82,16 @@ export type Receipt = typeof receipts.$inferSelect;
 export type InsertReceipt = z.infer<typeof insertReceiptSchema>;
 export type Earning = typeof earnings.$inferSelect;
 
-// Runtime enum
+// Enums
 export const RuntimeEnum = z.enum(["ollama", "vllm", "tensorrtllm", "tgi"]);
 export const StatusEnum = z.enum(["pending", "active", "quarantine", "offline"]);
+export const RoleEnum = z.enum(["admin", "operator", "viewer"]);
+
+// Login schema
+export const loginSchema = z.object({
+  username: z.string().min(3),
+  password: z.string().min(6),
+});
 
 // Heartbeat schema
 export const heartbeatSchema = z.object({

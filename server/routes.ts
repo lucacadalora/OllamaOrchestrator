@@ -2,8 +2,9 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { requireNodeAuth, generateNodeSecret } from "./security";
-import { insertNodeSchema, heartbeatSchema, insertReceiptSchema, RuntimeEnum, StatusEnum } from "@shared/schema";
+import { insertNodeSchema, heartbeatSchema, insertReceiptSchema, RuntimeEnum, StatusEnum, loginSchema } from "@shared/schema";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
 
 const registerSchema = insertNodeSchema.extend({
   runtime: RuntimeEnum,
@@ -15,7 +16,143 @@ const nodeFiltersSchema = z.object({
   runtime: RuntimeEnum.optional(),
 });
 
+// Authentication middleware
+function requireAuth(req: any, res: any, next: any) {
+  if (!req.session?.userId) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+  next();
+}
+
+// Role-based authorization middleware
+function requireRole(...allowedRoles: string[]) {
+  return (req: any, res: any, next: any) => {
+    if (!req.session?.userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+    if (!allowedRoles.includes(req.session.role || "")) {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
+    next();
+  };
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Auth routes
+  app.post("/api/v1/auth/register", async (req, res) => {
+    try {
+      const data = loginSchema.parse(req.body);
+      
+      // Check if user exists
+      const existingUser = await storage.getUserByUsername(data.username);
+      if (existingUser) {
+        return res.status(400).json({ error: "Username already exists" });
+      }
+      
+      // Hash password
+      const hashedPassword = await bcrypt.hash(data.password, 10);
+      
+      // Create user with operator role by default
+      const user = await storage.createUser({
+        username: data.username,
+        password: hashedPassword,
+        role: "operator",
+      });
+      
+      // Regenerate session to prevent session fixation
+      req.session.regenerate((err) => {
+        if (err) {
+          return res.status(500).json({ error: "Session error" });
+        }
+        
+        req.session.userId = user.id;
+        req.session.role = user.role;
+        
+        res.json({
+          id: user.id,
+          username: user.username,
+          role: user.role,
+        });
+      });
+    } catch (error) {
+      console.error("Register error:", error);
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else {
+        res.status(500).json({ error: "Registration failed" });
+      }
+    }
+  });
+
+  app.post("/api/v1/auth/login", async (req, res) => {
+    try {
+      const data = loginSchema.parse(req.body);
+      
+      // Find user
+      const user = await storage.getUserByUsername(data.username);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+      
+      // Verify password
+      const valid = await bcrypt.compare(data.password, user.password);
+      if (!valid) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+      
+      // Regenerate session to prevent session fixation
+      req.session.regenerate((err) => {
+        if (err) {
+          return res.status(500).json({ error: "Session error" });
+        }
+        
+        req.session.userId = user.id;
+        req.session.role = user.role;
+        
+        res.json({
+          id: user.id,
+          username: user.username,
+          role: user.role,
+        });
+      });
+    } catch (error) {
+      console.error("Login error:", error);
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else {
+        res.status(500).json({ error: "Login failed" });
+      }
+    }
+  });
+
+  app.post("/api/v1/auth/logout", (req, res) => {
+    req.session.destroy((err) => {
+      if (err) {
+        return res.status(500).json({ error: "Logout failed" });
+      }
+      res.clearCookie("dgon.sid");
+      res.json({ success: true });
+    });
+  });
+
+  app.get("/api/v1/auth/me", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      
+      res.json({
+        id: user.id,
+        username: user.username,
+        role: user.role,
+      });
+    } catch (error) {
+      console.error("Get user error:", error);
+      res.status(500).json({ error: "Failed to get user" });
+    }
+  });
+
   // Public summary endpoint
   app.get("/api/v1/summary", async (req, res) => {
     try {

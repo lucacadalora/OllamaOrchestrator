@@ -1,6 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useAuth } from "@/lib/auth";
 import { 
   Network, 
   BarChart3, 
@@ -8,8 +9,11 @@ import {
   Receipt, 
   DollarSign, 
   PlusCircle, 
-  RotateCw 
+  RotateCw,
+  LogOut,
+  User
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const navigation = [
   { name: "Overview", href: "/", icon: BarChart3 },
@@ -22,6 +26,7 @@ const navigation = [
 export default function Sidebar() {
   const [location] = useLocation();
   const { lastUpdate, isRefreshing } = useRealtime();
+  const { user, logout } = useAuth();
 
   const secondsAgo = Math.floor((Date.now() - lastUpdate.getTime()) / 1000);
 
@@ -67,7 +72,7 @@ export default function Sidebar() {
         </ul>
       </nav>
 
-      <div className="p-4 border-t border-sidebar-border">
+      <div className="p-4 border-t border-sidebar-border space-y-3">
         <div className="flex items-center space-x-2 text-sm text-muted-foreground">
           <div className="status-dot active"></div>
           <span>Connected</span>
@@ -75,9 +80,32 @@ export default function Sidebar() {
             <RotateCw className={cn("w-3 h-3", isRefreshing && "refresh-indicator")} />
           </div>
         </div>
-        <p className="text-xs text-muted-foreground mt-1">
+        <p className="text-xs text-muted-foreground">
           Last update: <span data-testid="last-update">{secondsAgo}s ago</span>
         </p>
+        {user && (
+          <div className="pt-2 border-t border-sidebar-border">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center space-x-2">
+                <User className="w-4 h-4 text-muted-foreground" />
+                <div>
+                  <p className="text-xs font-medium text-sidebar-foreground" data-testid="text-username">{user.username}</p>
+                  <p className="text-xs text-muted-foreground capitalize" data-testid="text-role">{user.role}</p>
+                </div>
+              </div>
+            </div>
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              className="w-full justify-start" 
+              onClick={logout}
+              data-testid="button-logout"
+            >
+              <LogOut className="w-4 h-4 mr-2" />
+              Logout
+            </Button>
+          </div>
+        )}
       </div>
     </aside>
   );

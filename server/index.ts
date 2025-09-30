@@ -1,12 +1,36 @@
 import express, { type Request, Response, NextFunction } from "express";
+import session from "express-session";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
 
+// Session configuration
+app.use(
+  session({
+    name: "dgon.sid",
+    secret: process.env.SESSION_SECRET || "dgon-secret-key-change-in-prod",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: process.env.NODE_ENV === "production",
+      httpOnly: true,
+      sameSite: "lax",
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+    },
+  })
+);
+
 declare module 'http' {
   interface IncomingMessage {
     rawBody: unknown
+  }
+}
+
+declare module 'express-session' {
+  interface SessionData {
+    userId?: string;
+    role?: string;
   }
 }
 app.use(express.json({

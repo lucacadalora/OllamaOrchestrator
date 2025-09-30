@@ -844,6 +844,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // WebSocket connection handler
   wss.on("connection", (ws, req) => {
+    // Only handle WebSocket connections for /api/ws path
+    if (!req.url?.startsWith("/api/ws")) {
+      return;
+    }
+    
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const sessionId = url.searchParams.get("session");
     

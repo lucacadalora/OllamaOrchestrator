@@ -4,10 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Bot, Send, User, Cpu, Loader2 } from "lucide-react";
+import { Bot, Send, User, Cpu, Loader2, Wifi, WifiOff } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useWebSocketChat } from "@/hooks/useWebSocketChat";
 
 interface Message {
   id: string;
@@ -33,6 +34,7 @@ export default function Chat() {
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const { toast } = useToast();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const { isConnected, sendMessage: sendWebSocketMessage, currentResponse, isStreaming } = useWebSocketChat();
 
   // Fetch available models
   const { data: modelsData, isLoading: loadingModels } = useQuery<ModelsResponse>({
@@ -136,19 +138,49 @@ export default function Chat() {
     };
     setMessages(prev => [...prev, userMessage]);
     
-    // Send to API
-    sendMutation.mutate(input.trim());
+    // Try WebSocket first, fall back to HTTP if not connected
+    const allMessages = [...messages.map(m => ({ role: m.role, content: m.content })), { role: "user", content: input.trim() }];
+    const sentViaWebSocket = sendWebSocketMessage(selectedModel, allMessages);
+    
+    if (!sentViaWebSocket) {
+      // Fallback to HTTP polling
+      sendMutation.mutate(input.trim());
+    } else {
+      // Add placeholder for WebSocket streaming
+      const assistantMessageId = `msg-${Date.now()}-assistant`;
+      const assistantMessage: Message = {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+    }
     
     // Clear input
     setInput("");
   };
+
+  // Update last assistant message when WebSocket streams
+  useEffect(() => {
+    if (currentResponse && messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage.role === "assistant") {
+        setMessages(prev => prev.map((msg, idx) =>
+          idx === prev.length - 1 && msg.role === "assistant"
+            ? { ...msg, content: currentResponse }
+            : msg
+        ));
+      }
+    }
+  }, [currentResponse]);
 
   // Auto scroll to bottom
   useEffect(() => {
     if (scrollAreaRef.current) {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, currentResponse]);
 
   const models = modelsData?.models || [];
 
@@ -218,6 +250,17 @@ export default function Chat() {
                   <span className="flex items-center gap-2">
                     Using <Badge variant="outline">{selectedModel}</Badge>
                     on distributed nodes
+                    {isConnected ? (
+                      <Badge variant="default" className="bg-green-600">
+                        <Wifi className="w-3 h-3 mr-1" />
+                        WebSocket
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary">
+                        <WifiOff className="w-3 h-3 mr-1" />
+                        HTTP Polling
+                      </Badge>
+                    )}
                   </span>
                 ) : (
                   "Select a model to start chatting"

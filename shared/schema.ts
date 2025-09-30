@@ -54,6 +54,7 @@ export const earnings = pgTable("earnings", {
 export const inferenceQueue = pgTable("inference_queue", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   nodeId: text("node_id").references(() => nodes.id),
+  userId: varchar("user_id").references(() => users.id),
   model: text("model").notNull(),
   messages: jsonb("messages").notNull(),
   status: text("status").notNull().default("pending"), // pending, processing, completed, failed
@@ -61,6 +62,23 @@ export const inferenceQueue = pgTable("inference_queue", {
   error: text("error"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+export const userReceipts = pgTable("user_receipts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  inferenceId: varchar("inference_id").notNull().references(() => inferenceQueue.id),
+  nodeId: text("node_id").references(() => nodes.id),
+  model: text("model").notNull(),
+  requestHash: text("request_hash").notNull(), // Hash of the request
+  responseHash: text("response_hash").notNull(), // Hash of the response
+  previousHash: text("previous_hash"), // Link to previous receipt (blockchain style)
+  blockHash: text("block_hash").notNull(), // Combined hash of all fields
+  blockNumber: serial("block_number"), // Sequential block number
+  status: text("status").notNull().default("delivered"), // delivered, failed
+  processingTime: numeric("processing_time"), // Time in ms
+  tokenCount: numeric("token_count"), // Number of tokens generated
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
 // Insert schemas
@@ -88,6 +106,12 @@ export const insertReceiptSchema = createInsertSchema(receipts).pick({
   payload: true,
 });
 
+export const insertUserReceiptSchema = createInsertSchema(userReceipts).omit({
+  id: true,
+  blockNumber: true,
+  createdAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -96,6 +120,8 @@ export type InsertNode = z.infer<typeof insertNodeSchema>;
 export type NodeSecret = typeof nodeSecrets.$inferSelect;
 export type Receipt = typeof receipts.$inferSelect;
 export type InsertReceipt = z.infer<typeof insertReceiptSchema>;
+export type UserReceipt = typeof userReceipts.$inferSelect;
+export type InsertUserReceipt = z.infer<typeof insertUserReceiptSchema>;
 export type Earning = typeof earnings.$inferSelect;
 export type InferenceRequest = typeof inferenceQueue.$inferSelect;
 

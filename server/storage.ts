@@ -1,4 +1,4 @@
-import { nodes, nodeSecrets, receipts, earnings, users, inferenceQueue, type Node, type InsertNode, type NodeSecret, type Receipt, type InsertReceipt, type Earning, type User, type InsertUser, type InferenceRequest } from "@shared/schema";
+import { nodes, nodeSecrets, receipts, earnings, users, inferenceQueue, userReceipts, type Node, type InsertNode, type NodeSecret, type Receipt, type InsertReceipt, type Earning, type User, type InsertUser, type InferenceRequest, type UserReceipt, type InsertUserReceipt } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, gte } from "drizzle-orm";
 
@@ -39,10 +39,16 @@ export interface IStorage {
   }>;
   
   // Inference queue operations
-  createInferenceRequest(model: string, messages: any[]): Promise<InferenceRequest>;
+  createInferenceRequest(model: string, messages: any[], userId?: string): Promise<InferenceRequest>;
   getNextPendingRequest(nodeId: string): Promise<InferenceRequest | undefined>;
   updateRequestStatus(id: string, status: string, response?: string, error?: string): Promise<void>;
   getRequestById(id: string): Promise<InferenceRequest | undefined>;
+  
+  // User receipts operations
+  createUserReceipt(receipt: InsertUserReceipt): Promise<UserReceipt>;
+  getUserReceipts(userId: string, limit?: number): Promise<UserReceipt[]>;
+  getLastUserReceipt(userId: string): Promise<UserReceipt | undefined>;
+  getAllReceipts(limit?: number): Promise<UserReceipt[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -265,13 +271,14 @@ export class DatabaseStorage implements IStorage {
       .where(eq(earnings.id, earningId));
   }
   
-  async createInferenceRequest(model: string, messages: any[]): Promise<InferenceRequest> {
+  async createInferenceRequest(model: string, messages: any[], userId?: string): Promise<InferenceRequest> {
     const [request] = await db
       .insert(inferenceQueue)
       .values({
         model,
         messages,
-        status: "pending"
+        status: "pending",
+        userId
       })
       .returning();
     return request;
@@ -337,6 +344,49 @@ export class DatabaseStorage implements IStorage {
       .from(inferenceQueue)
       .where(eq(inferenceQueue.id, id));
     return request || undefined;
+  }
+  
+  async createUserReceipt(receipt: InsertUserReceipt): Promise<UserReceipt> {
+    const [userReceipt] = await db
+      .insert(userReceipts)
+      .values(receipt)
+      .returning();
+    return userReceipt;
+  }
+  
+  async getUserReceipts(userId: string, limit?: number): Promise<UserReceipt[]> {
+    const query = db
+      .select()
+      .from(userReceipts)
+      .where(eq(userReceipts.userId, userId))
+      .orderBy(desc(userReceipts.blockNumber));
+    
+    if (limit) {
+      return await query.limit(limit);
+    }
+    return await query;
+  }
+  
+  async getLastUserReceipt(userId: string): Promise<UserReceipt | undefined> {
+    const [receipt] = await db
+      .select()
+      .from(userReceipts)
+      .where(eq(userReceipts.userId, userId))
+      .orderBy(desc(userReceipts.blockNumber))
+      .limit(1);
+    return receipt || undefined;
+  }
+  
+  async getAllReceipts(limit?: number): Promise<UserReceipt[]> {
+    const query = db
+      .select()
+      .from(userReceipts)
+      .orderBy(desc(userReceipts.blockNumber));
+    
+    if (limit) {
+      return await query.limit(limit);
+    }
+    return await query;
   }
 }
 

@@ -44,9 +44,10 @@ def check_ollama_ready():
         with urlopen(req, timeout=2) as response:
             data = json.loads(response.read().decode())
             models = data.get("models", [])
-            return len(models) > 0, len(models)
+            model_names = [m.get("name", "").split(":")[0] for m in models] if models else []
+            return len(models) > 0, len(models), model_names
     except Exception:
-        return False, 0
+        return False, 0, []
 
 def register_node():
     """Register this node with the DGON network"""
@@ -85,13 +86,14 @@ def register_node():
         log(f"  Make sure the DGON Console is running at: {API_BASE}", YELLOW)
         sys.exit(1)
 
-def send_heartbeat(token, ready, model_count=0):
+def send_heartbeat(token, ready, model_count=0, model_names=None):
     """Send heartbeat to DGON network with node status"""
     data = {
         "gpuUtil": 0.4,
         "memUsedGb": 6.0,
         "p95Ms": 320,
-        "ready": ready
+        "ready": ready,
+        "models": model_names or []
     }
     
     body = json.dumps(data).encode('utf-8')
@@ -204,15 +206,16 @@ Configuration:
         log(f"", "")
     
     # Check Ollama status
-    ready, model_count = check_ollama_ready()
+    ready, model_count, model_names = check_ollama_ready()
     if ready:
         log(f"✓ Ollama is running with {model_count} model(s) loaded", GREEN)
+        log(f"  Available models: {', '.join(model_names)}", GREEN)
     else:
         log(f"⚠ Ollama is not ready (no models loaded or not running)", YELLOW)
         log(f"  Start Ollama and load a model to activate this node", YELLOW)
     
     # Send initial heartbeat
-    send_heartbeat(token, ready, model_count)
+    send_heartbeat(token, ready, model_count, model_names)
     
     # Optional: Send test receipt on first run
     if ready and not NODE_TOKEN:
@@ -229,8 +232,8 @@ Configuration:
     try:
         while True:
             time.sleep(10)
-            ready, model_count = check_ollama_ready()
-            send_heartbeat(token, ready, model_count)
+            ready, model_count, model_names = check_ollama_ready()
+            send_heartbeat(token, ready, model_count, model_names)
     except KeyboardInterrupt:
         log(f"", "")
         log(f"👋 Agent stopped by user", YELLOW)

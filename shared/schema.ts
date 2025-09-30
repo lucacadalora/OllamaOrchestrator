@@ -21,6 +21,7 @@ export const nodes = pgTable("nodes", {
   greenEnergy: boolean("green_energy").default(false),
   asnHint: text("asn_hint"),
   walletAddress: text("wallet_address"),
+  models: text().array().default(sql`ARRAY[]::text[]`),
   lastHeartbeat: timestamp("last_heartbeat", { withTimezone: true }).defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
@@ -99,6 +100,7 @@ export const heartbeatSchema = z.object({
   memUsedGb: z.number().optional(),
   p95Ms: z.number().optional(),
   ready: z.boolean(),
+  models: z.array(z.string()).optional().default([]),
 });
 
 export type HeartbeatData = z.infer<typeof heartbeatSchema>;

@@ -87,10 +87,14 @@ export class DatabaseStorage implements IStorage {
       .where(eq(nodes.id, id));
   }
 
-  async updateNodeHeartbeat(id: string): Promise<void> {
+  async updateNodeHeartbeat(id: string, models?: string[]): Promise<void> {
+    const updateData: any = { lastHeartbeat: new Date() };
+    if (models !== undefined) {
+      updateData.models = models;
+    }
     await db
       .update(nodes)
-      .set({ lastHeartbeat: new Date() })
+      .set(updateData)
       .where(eq(nodes.id, id));
   }
 

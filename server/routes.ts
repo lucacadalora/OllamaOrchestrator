@@ -247,11 +247,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ error: "Node not found" });
         }
 
-        // Update status based on readiness
+        // Update status based on readiness and update models list
         const newStatus = data.ready ? "active" : "pending";
         await storage.updateNodeStatus(nodeId, newStatus);
+        await storage.updateNodeHeartbeat(nodeId, data.models || []);
 
-        res.json({ status: newStatus });
+        res.json({ status: newStatus, models: data.models || [] });
       } catch (error) {
         console.error("Heartbeat error:", error);
         if (error instanceof z.ZodError) {

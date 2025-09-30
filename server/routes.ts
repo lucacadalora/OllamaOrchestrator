@@ -661,40 +661,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "No nodes available with this model" });
       }
       
-      // Create inference request in queue
+      // Create inference request in queue and return immediately
       const request = await storage.createInferenceRequest(model, messages);
       
-      // Poll for completion (max 30 seconds)
-      const startTime = Date.now();
-      const timeout = 30000;
-      
-      while (Date.now() - startTime < timeout) {
-        const updatedRequest = await storage.getRequestById(request.id);
-        
-        if (updatedRequest?.status === "completed") {
-          return res.json({
-            nodeId: updatedRequest.nodeId,
-            model,
-            response: updatedRequest.response,
-            done: true
-          });
-        } else if (updatedRequest?.status === "failed") {
-          return res.status(500).json({
-            error: updatedRequest.error || "Inference failed",
-            nodeId: updatedRequest.nodeId
-          });
-        }
-        
-        // Wait a bit before polling again
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-      
-      // Timeout
-      res.status(504).json({ error: "Request timeout - no nodes available" });
+      // Return request ID for frontend to poll
+      res.json({
+        requestId: request.id,
+        status: "pending"
+      });
       
     } catch (error) {
       console.error("Inference routing error:", error);
       res.status(500).json({ error: "Failed to route inference request" });
+    }
+  });
+
+  // Get inference request status - for frontend polling
+  app.get("/api/v1/inference/status/:id", async (req, res) => {
+    try {
+      const request = await storage.getRequestById(req.params.id);
+      
+      if (!request) {
+        return res.status(404).json({ error: "Request not found" });
+      }
+      
+      res.json({
+        requestId: request.id,
+        status: request.status,
+        response: request.response || "",
+        nodeId: request.nodeId,
+        error: request.error,
+        done: request.status === "completed" || request.status === "failed"
+      });
+      
+    } catch (error) {
+      console.error("Status check error:", error);
+      res.status(500).json({ error: "Failed to get request status" });
     }
   });
   
@@ -744,6 +746,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (error) {
         console.error("Completion error:", error);
         res.status(500).json({ error: "Failed to complete request" });
+      }
+    }
+  );
+
+  // Node streaming endpoint - Submit streaming chunks
+  app.post(
+    "/api/v1/inference/stream",
+    requireNodeAuth((nodeId) => storage.getNodeSecret(nodeId)),
+    async (req, res) => {
+      try {
+        const { id, chunk, done } = req.body;
+        
+        if (!id) {
+          return res.status(400).json({ error: "Request ID required" });
+        }
+        
+        // Store chunk in request (append to existing response)
+        const request = await storage.getRequestById(id);
+        if (request) {
+          const currentResponse = request.response || "";
+          await storage.updateRequestStatus(
+            id, 
+            done ? "completed" : "streaming",
+            currentResponse + chunk
+          );
+        }
+        
+        res.json({ success: true });
+        
+      } catch (error) {
+        console.error("Streaming error:", error);
+        res.status(500).json({ error: "Failed to process stream" });
       }
     }
   );

@@ -172,11 +172,11 @@ def poll_for_inference_requests(token):
                 
                 prompt += "Assistant: "
                 
-                # Call Ollama API
+                # Call Ollama API with streaming enabled
                 ollama_data = {
                     "model": model,
                     "prompt": prompt,
-                    "stream": False
+                    "stream": True
                 }
                 
                 ollama_req = Request(
@@ -187,12 +187,20 @@ def poll_for_inference_requests(token):
                 )
                 
                 try:
-                    with urlopen(ollama_req, timeout=60) as ollama_response:
-                        ollama_result = json.loads(ollama_response.read().decode())
-                        ai_response = ollama_result.get("response", "")
+                    full_response = ""
+                    with urlopen(ollama_req, timeout=300) as ollama_response:
+                        # Stream tokens from Ollama
+                        for line in ollama_response:
+                            if line:
+                                chunk = json.loads(line.decode())
+                                token = chunk.get("response", "")
+                                full_response += token
+                                
+                                # Send chunk immediately for real-time display
+                                submit_inference_chunk(token, request_id, token, chunk.get("done", False))
                         
-                        # Send response back to console
-                        submit_inference_response(token, request_id, ai_response)
+                        # Send final complete response
+                        submit_inference_response(token, request_id, full_response)
                         log(f"✓ Inference completed for model {model}", GREEN)
                         
                 except Exception as e:
@@ -205,6 +213,36 @@ def poll_for_inference_requests(token):
             log(f"✗ Poll error: {e.read().decode()}", RED)
     except Exception as e:
         log(f"✗ Poll error: {e}", RED)
+
+def submit_inference_chunk(token, request_id, chunk, done=False):
+    """Submit a streaming chunk back to console"""
+    data = {
+        "id": request_id,
+        "chunk": chunk,
+        "done": done
+    }
+    
+    body = json.dumps(data).encode('utf-8')
+    timestamp = str(int(time.time()))
+    signature = calculate_hmac(token, body, timestamp)
+    
+    req = Request(
+        f"{API_BASE}/v1/inference/stream",
+        data=body,
+        headers={
+            'Content-Type': 'application/json',
+            'X-Node-Id': NODE_ID,
+            'X-Node-Ts': timestamp,
+            'X-Node-Auth': signature
+        },
+        method='POST'
+    )
+    
+    try:
+        with urlopen(req, timeout=5) as response:
+            pass  # Just send the chunk, no need to wait
+    except Exception as e:
+        pass  # Silently ignore chunk submission errors
 
 def submit_inference_response(token, request_id, response, error=None):
     """Submit inference response back to console"""

@@ -42,7 +42,7 @@ export default function Chat() {
 
   // Set default model when data loads
   useEffect(() => {
-    if (modelsData?.models?.length > 0 && !selectedModel) {
+    if (modelsData?.models && modelsData.models.length > 0 && !selectedModel) {
       setSelectedModel(modelsData.models[0].model);
     }
   }, [modelsData, selectedModel]);

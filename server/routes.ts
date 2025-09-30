@@ -887,6 +887,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
+  // User receipts endpoints
+  app.get("/api/v1/user/receipts", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId!;
+      const limit = parseInt((req.query.limit as string) || "50");
+      
+      const receipts = await storage.getUserReceipts(userId, limit);
+      
+      // Verify the blockchain integrity for this user
+      const chainValid = await ReceiptGenerator.verifyReceiptChain(userId);
+      
+      res.json({
+        receipts,
+        chainValid,
+        totalReceipts: receipts.length
+      });
+    } catch (error) {
+      console.error("List user receipts error:", error);
+      res.status(500).json({ error: "Failed to list receipts" });
+    }
+  });
+  
+  // Get all receipts - admin only
+  app.get("/api/v1/admin/receipts", requireRole("admin"), async (req, res) => {
+    try {
+      const limit = parseInt((req.query.limit as string) || "100");
+      
+      const receipts = await storage.getAllReceipts(limit);
+      
+      res.json({
+        receipts,
+        totalReceipts: receipts.length
+      });
+    } catch (error) {
+      console.error("List all receipts error:", error);
+      res.status(500).json({ error: "Failed to list all receipts" });
+    }
+  });
+  
+  // Verify receipt chain integrity for a user
+  app.get("/api/v1/user/receipts/verify", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session.userId!;
+      const chainValid = await ReceiptGenerator.verifyReceiptChain(userId);
+      
+      res.json({
+        userId,
+        chainValid,
+        message: chainValid ? "Receipt chain is valid" : "Receipt chain integrity compromised"
+      });
+    } catch (error) {
+      console.error("Verify chain error:", error);
+      res.status(500).json({ error: "Failed to verify receipt chain" });
+    }
+  });
+  
   // List receipts - requires auth with RBAC
   app.get("/api/v1/receipts", requireAuth, async (req, res) => {
     try {

@@ -8,7 +8,8 @@ import {
   Server, 
   Receipt, 
   DollarSign, 
-  PlusCircle, 
+  PlusCircle,
+  MessageCircle,
   RotateCw,
   LogOut,
   User
@@ -18,6 +19,7 @@ import { Button } from "@/components/ui/button";
 const navigation = [
   { name: "Overview", href: "/", icon: BarChart3 },
   { name: "Nodes", href: "/nodes", icon: Server },
+  { name: "AI Chat", href: "/chat", icon: MessageCircle },
   { name: "Receipts", href: "/receipts", icon: Receipt },
   { name: "Earnings", href: "/earnings", icon: DollarSign },
   { name: "Run a Node", href: "/setup", icon: PlusCircle },

@@ -10,6 +10,7 @@ import Nodes from "@/pages/nodes";
 import Receipts from "@/pages/receipts";
 import Earnings from "@/pages/earnings";
 import Setup from "@/pages/setup";
+import Chat from "@/pages/chat";
 import Login from "@/pages/login";
 import NotFound from "@/pages/not-found";
 
@@ -28,6 +29,7 @@ function Router() {
                 <Route path="/receipts" component={Receipts} />
                 <Route path="/earnings" component={Earnings} />
                 <Route path="/setup" component={Setup} />
+                <Route path="/chat" component={Chat} />
                 <Route component={NotFound} />
               </Switch>
             </main>

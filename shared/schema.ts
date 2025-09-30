@@ -78,6 +78,8 @@ export const insertNodeSchema = createInsertSchema(nodes).pick({
   greenEnergy: true,
 });
 
+export const registerSchema = insertNodeSchema;
+
 export const insertReceiptSchema = createInsertSchema(receipts).pick({
   id: true,
   nodeId: true,

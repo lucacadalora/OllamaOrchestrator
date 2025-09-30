@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { requireNodeAuth, generateNodeSecret } from "./security";
-import { insertNodeSchema, heartbeatSchema, insertReceiptSchema, RuntimeEnum, StatusEnum, loginSchema } from "@shared/schema";
+import { insertNodeSchema, registerSchema, heartbeatSchema, insertReceiptSchema, RuntimeEnum, StatusEnum, loginSchema } from "@shared/schema";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import fs from "fs";
@@ -193,6 +193,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public node self-registration (no auth required for initial registration)
+  app.post("/api/v1/nodes/self-register", async (req, res) => {
+    try {
+      const data = insertNodeSchema.parse(req.body);
+      
+      // Check if node already exists
+      const existingNode = await storage.getNode(data.id);
+      if (existingNode) {
+        return res.status(400).json({ error: "Node already registered" });
+      }
+      
+      // Generate node secret
+      const nodeSecret = generateNodeSecret();
+      
+      // Create node
+      await storage.createNode({
+        ...data,
+        status: "pending" as StatusEnum,
+      });
+      
+      // Store the secret
+      await storage.createNodeSecret(data.id, nodeSecret);
+      
+      res.json({
+        nodeId: data.id,
+        token: nodeSecret,
+        message: "Node registered successfully",
+      });
+    } catch (error) {
+      console.error("Registration error:", error);
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: "Invalid request data", details: error.errors });
+      } else {
+        res.status(500).json({ error: "Failed to register node" });
+      }
+    }
+  });
+  
   // Node registration (requires admin or operator role)
   app.post("/api/v1/nodes/register", requireRole("admin", "operator"), async (req, res) => {
     try {
@@ -836,19 +874,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const httpServer = createServer(app);
   
-  // Create WebSocket server for real-time streaming
-  const wss = new WebSocketServer({ server: httpServer });
+  // Create WebSocket server for real-time streaming (noServer mode)
+  const wss = new WebSocketServer({ noServer: true });
   
   // Store active WebSocket connections
   const activeConnections = new Map<string, WebSocket>();
   
-  // WebSocket connection handler
-  wss.on("connection", (ws, req) => {
-    // Only handle WebSocket connections for /api/ws path
-    if (!req.url?.startsWith("/api/ws")) {
+  // Handle WebSocket upgrade manually
+  httpServer.on('upgrade', (request, socket, head) => {
+    // Only handle WebSocket connections for our /api/ws path
+    if (!request.url?.startsWith('/api/ws')) {
+      // Let other WebSocket connections (like Vite HMR) pass through
       return;
     }
     
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  });
+  
+  // WebSocket connection handler
+  wss.on("connection", (ws, req) => {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const sessionId = url.searchParams.get("session");
     

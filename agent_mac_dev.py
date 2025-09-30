@@ -66,7 +66,7 @@ def register_node():
     
     body = json.dumps(data).encode('utf-8')
     req = Request(
-        f"{API_BASE}/v1/nodes/register",
+        f"{API_BASE}/v1/nodes/self-register",
         data=body,
         headers={'Content-Type': 'application/json'},
         method='POST'
@@ -75,10 +75,14 @@ def register_node():
     try:
         with urlopen(req, timeout=10) as response:
             result = json.loads(response.read().decode())
-            token = result.get("nodeToken")
-            log(f"✓ Registered successfully! Node ID: {NODE_ID}", GREEN)
-            log(f"  Node token: {token[:16]}...", GREEN)
-            return token
+            token = result.get("token") or result.get("nodeToken")
+            if token:
+                log(f"✓ Registered successfully! Node ID: {NODE_ID}", GREEN)
+                log(f"  Node token: {token[:16]}...", GREEN)
+                return token
+            else:
+                log(f"✗ Registration failed: No token received", RED)
+                return None
     except HTTPError as e:
         error_msg = e.read().decode()
         log(f"✗ Registration failed: {error_msg}", RED)

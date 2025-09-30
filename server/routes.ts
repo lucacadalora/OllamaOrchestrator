@@ -598,7 +598,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const activeNodes = await storage.listNodes({ status: "active" });
       const modelsMap = new Map<string, string[]>();
       
+      // Filter out nodes that haven't sent heartbeat in last 30 seconds
+      const now = new Date();
+      const thirtySecondsAgo = new Date(now.getTime() - 30000);
+      
       activeNodes.forEach(node => {
+        // Skip nodes that are offline (no heartbeat in last 30 seconds)
+        if (!node.lastHeartbeat || new Date(node.lastHeartbeat) < thirtySecondsAgo) {
+          return;
+        }
+        
         const models = node.models || [];
         models.forEach(model => {
           if (!modelsMap.has(model)) {
@@ -630,10 +639,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Model and messages required" });
       }
       
-      // Check if any nodes have this model
+      // Check if any nodes have this model and are online
       const activeNodes = await storage.listNodes({ status: "active" });
+      const now = new Date();
+      const thirtySecondsAgo = new Date(now.getTime() - 30000);
+      
       const availableNodes = activeNodes.filter(node => 
-        node.models && node.models.includes(model)
+        node.models && 
+        node.models.includes(model) &&
+        node.lastHeartbeat && 
+        new Date(node.lastHeartbeat) >= thirtySecondsAgo
       );
       
       if (availableNodes.length === 0) {

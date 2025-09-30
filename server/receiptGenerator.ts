@@ -69,6 +69,8 @@ export class ReceiptGenerator {
       const requestHash = this.generateRequestHash(messages);
       const responseHash = this.generateResponseHash(response);
       const previousHash = lastReceipt?.blockHash || null;
+      
+      // Use a single timestamp for both hash generation and storage
       const timestamp = new Date();
       
       // Generate block hash
@@ -81,7 +83,7 @@ export class ReceiptGenerator {
         timestamp
       );
 
-      // Create the receipt
+      // Create the receipt with the same timestamp used for hashing
       const receipt: InsertUserReceipt = {
         userId,
         inferenceId,
@@ -93,7 +95,8 @@ export class ReceiptGenerator {
         blockHash,
         status: "delivered",
         processingTime: processingTime.toString(),
-        tokenCount: tokenCount ? tokenCount.toString() : null
+        tokenCount: tokenCount ? tokenCount.toString() : null,
+        createdAt: timestamp  // Use the same timestamp for deterministic verification
       };
 
       await storage.createUserReceipt(receipt);
@@ -108,30 +111,51 @@ export class ReceiptGenerator {
    * Verify the integrity of a receipt chain
    */
   static async verifyReceiptChain(userId: string): Promise<boolean> {
-    const receipts = await storage.getUserReceipts(userId);
+    const allReceipts = await storage.getUserReceipts(userId);
     
-    if (receipts.length === 0) {
+    if (allReceipts.length === 0) {
       return true; // No receipts to verify
     }
 
-    // Verify each receipt's block hash
-    for (let i = receipts.length - 1; i >= 0; i--) {
+    // Sort receipts by block number ascending to ensure correct chain order
+    const receipts = [...allReceipts].sort((a, b) => {
+      const aNum = a.blockNumber || 0;
+      const bNum = b.blockNumber || 0;
+      return aNum - bNum;
+    });
+
+    // Verify each receipt's block hash using stored previousHash
+    for (let i = 0; i < receipts.length; i++) {
       const receipt = receipts[i];
-      const previousHash = i < receipts.length - 1 ? receipts[i + 1].blockHash : null;
       
-      // Recalculate the block hash
+      // Recalculate the block hash using the stored previousHash
       const calculatedHash = this.generateBlockHash(
         receipt.userId,
         receipt.inferenceId,
         receipt.requestHash,
         receipt.responseHash,
-        previousHash,
+        receipt.previousHash,
         receipt.createdAt!
       );
       
       if (calculatedHash !== receipt.blockHash) {
-        console.error(`Chain verification failed at block #${receipt.blockNumber}`);
+        console.error(`Chain verification failed at block #${receipt.blockNumber}: hash mismatch`);
         return false;
+      }
+      
+      // Also verify the chain linkage: each receipt's previousHash should match the previous receipt's blockHash
+      if (i > 0) {
+        const previousReceipt = receipts[i - 1];
+        if (receipt.previousHash !== previousReceipt.blockHash) {
+          console.error(`Chain linkage broken between blocks #${previousReceipt.blockNumber} and #${receipt.blockNumber}`);
+          return false;
+        }
+      } else {
+        // First receipt should have null previousHash
+        if (receipt.previousHash !== null) {
+          console.error(`First receipt (block #${receipt.blockNumber}) should have null previousHash`);
+          return false;
+        }
       }
     }
     

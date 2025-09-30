@@ -109,7 +109,6 @@ export const insertReceiptSchema = createInsertSchema(receipts).pick({
 export const insertUserReceiptSchema = createInsertSchema(userReceipts).omit({
   id: true,
   blockNumber: true,
-  createdAt: true,
 });
 
 // Types

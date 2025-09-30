@@ -194,7 +194,7 @@ def poll_for_inference_requests(token):
                 try:
                     full_response = ""
                     chunk_buffer = []  # Buffer chunks to reduce HTTP calls
-                    buffer_size = 10  # Send every 10 chunks to reduce overhead
+                    buffer_size = 2  # Send every 2 chunks for faster streaming
                     
                     with urlopen(ollama_req, timeout=300) as ollama_response:
                         # Stream tokens from Ollama

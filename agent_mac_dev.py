@@ -14,6 +14,12 @@ import threading
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
+try:
+    import websocket
+    HAS_WEBSOCKET = True
+except ImportError:
+    HAS_WEBSOCKET = False
+
 # Configuration from environment variables
 API_BASE = os.getenv("DGON_API", "http://localhost:5000/api")
 NODE_ID = os.getenv("NODE_ID", f"macbook-{os.urandom(4).hex()}")
@@ -345,6 +351,137 @@ def send_test_receipt(token):
     except Exception as e:
         log(f"✗ Receipt failed: {e}", RED)
 
+def handle_websocket_inference(token, message):
+    """Handle inference request received via WebSocket"""
+    try:
+        request_id = message.get('id')
+        model = message.get('model', 'llama3.2')
+        messages = message.get('messages', [])
+        
+        log(f"📥 WebSocket request {request_id[:8]}...", BLUE)
+        
+        # Convert messages to Ollama format
+        prompt = ""
+        for msg in messages:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            if role == 'system':
+                prompt = f"System: {content}\n\n{prompt}"
+            elif role == 'user':
+                prompt += f"User: {content}\n\n"
+            elif role == 'assistant':
+                prompt += f"Assistant: {content}\n\n"
+        
+        prompt += "Assistant: "
+        
+        # Call Ollama with streaming
+        ollama_data = {
+            "model": model,
+            "prompt": prompt,
+            "stream": True
+        }
+        
+        ollama_req = Request(
+            "http://127.0.0.1:11434/api/generate",
+            data=json.dumps(ollama_data).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        
+        full_response = ""
+        
+        with urlopen(ollama_req, timeout=300) as ollama_response:
+            # Stream directly - no buffering!
+            for line in ollama_response:
+                if line:
+                    chunk = json.loads(line.decode())
+                    text_chunk = chunk.get("response", "")
+                    full_response += text_chunk
+                    done = chunk.get("done", False)
+                    
+                    # Send each chunk immediately (no batching)
+                    if text_chunk:
+                        submit_inference_chunk(token, request_id, text_chunk, done)
+        
+        # Send completion
+        submit_inference_response(token, request_id, full_response)
+        log(f"✓ WebSocket inference completed", GREEN)
+        
+    except Exception as e:
+        log(f"✗ WebSocket inference error: {e}", RED)
+        submit_inference_response(token, request_id, None, str(e))
+
+def run_websocket_mode(token):
+    """Run agent in WebSocket mode for real-time streaming"""
+    if not HAS_WEBSOCKET:
+        log(f"⚠ websocket-client not installed, falling back to HTTP mode", YELLOW)
+        log(f"  Install with: pip3 install websocket-client", YELLOW)
+        return False
+    
+    # Convert http:// to ws:// for WebSocket connection
+    ws_url = API_BASE.replace("http://", "ws://").replace("https://", "wss://")
+    ws_url = f"{ws_url}/ws?nodeId={NODE_ID}&token={token}"
+    
+    log(f"🔌 Connecting to WebSocket...", BLUE)
+    log(f"   URL: {ws_url.split('?')[0]}", BLUE)
+    
+    def on_message(ws, message):
+        try:
+            data = json.loads(message)
+            
+            if data.get('type') == 'inference_request':
+                # Handle inference in background thread to not block WebSocket
+                thread = threading.Thread(
+                    target=handle_websocket_inference,
+                    args=(token, data),
+                    daemon=True
+                )
+                thread.start()
+                
+        except Exception as e:
+            log(f"✗ WebSocket message error: {e}", RED)
+    
+    def on_error(ws, error):
+        log(f"✗ WebSocket error: {error}", RED)
+    
+    def on_close(ws, close_status_code, close_msg):
+        log(f"⚠ WebSocket disconnected", YELLOW)
+    
+    def on_open(ws):
+        log(f"✓ WebSocket connected - Real-time mode active!", GREEN)
+        log(f"  Waiting for inference requests...", GREEN)
+        
+        # Send heartbeats in background
+        def heartbeat_loop():
+            while True:
+                try:
+                    ready, model_count, model_names = check_ollama_ready()
+                    send_heartbeat(token, ready, model_count, model_names)
+                    time.sleep(10)
+                except Exception as e:
+                    log(f"✗ Heartbeat error: {e}", RED)
+                    break
+        
+        thread = threading.Thread(target=heartbeat_loop, daemon=True)
+        thread.start()
+    
+    try:
+        ws = websocket.WebSocketApp(
+            ws_url,
+            on_open=on_open,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close
+        )
+        
+        # Run forever
+        ws.run_forever()
+        return True
+        
+    except Exception as e:
+        log(f"✗ WebSocket connection failed: {e}", RED)
+        return False
+
 def main():
     """Main agent loop"""
     print(f"""
@@ -390,7 +527,23 @@ Configuration:
         send_test_receipt(token)
     
     log(f"", "")
-    log(f"🔄 Starting agent loop...", BLUE)
+    log(f"🚀 Starting agent...", BLUE)
+    
+    # Try WebSocket mode first (real-time streaming)
+    if HAS_WEBSOCKET and ready:
+        log(f"   Mode: WebSocket (real-time streaming)", GREEN)
+        log(f"   Press Ctrl+C to stop", BLUE)
+        log(f"", "")
+        
+        try:
+            run_websocket_mode(token)
+        except KeyboardInterrupt:
+            log(f"", "")
+            log(f"👋 Agent stopped by user", YELLOW)
+            sys.exit(0)
+    
+    # Fallback to HTTP polling mode
+    log(f"   Mode: HTTP polling (slower)", YELLOW)
     log(f"   Heartbeat: every 10 seconds", BLUE)
     log(f"   Inference polling: every 2 seconds", BLUE)
     log(f"   Press Ctrl+C to stop", BLUE)

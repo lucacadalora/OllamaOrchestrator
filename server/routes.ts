@@ -5,6 +5,8 @@ import { requireNodeAuth, generateNodeSecret } from "./security";
 import { insertNodeSchema, heartbeatSchema, insertReceiptSchema, RuntimeEnum, StatusEnum, loginSchema } from "@shared/schema";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import fs from "fs";
+import path from "path";
 
 const registerSchema = insertNodeSchema.extend({
   runtime: RuntimeEnum,
@@ -173,6 +175,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Summary error:", error);
       res.status(500).json({ error: "Failed to get summary" });
+    }
+  });
+
+  // Serve agent script for download
+  app.get("/agent_mac_dev.py", (req, res) => {
+    try {
+      const agentPath = path.join(process.cwd(), "agent_mac_dev.py");
+      const agentContent = fs.readFileSync(agentPath, "utf-8");
+      res.setHeader("Content-Type", "text/plain");
+      res.setHeader("Content-Disposition", "attachment; filename=agent_mac_dev.py");
+      res.send(agentContent);
+    } catch (error) {
+      console.error("Error serving agent script:", error);
+      res.status(404).json({ error: "Agent script not found" });
     }
   });
 

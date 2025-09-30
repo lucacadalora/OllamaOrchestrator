@@ -8,6 +8,7 @@ import Sidebar from "@/components/layout/sidebar";
 import Overview from "@/pages/overview";
 import Nodes from "@/pages/nodes";
 import Receipts from "@/pages/receipts";
+import UserReceipts from "@/pages/UserReceipts";
 import Earnings from "@/pages/earnings";
 import Setup from "@/pages/setup";
 import Chat from "@/pages/chat";
@@ -27,6 +28,7 @@ function Router() {
                 <Route path="/" component={Overview} />
                 <Route path="/nodes" component={Nodes} />
                 <Route path="/receipts" component={Receipts} />
+                <Route path="/user-receipts" component={UserReceipts} />
                 <Route path="/earnings" component={Earnings} />
                 <Route path="/setup" component={Setup} />
                 <Route path="/chat" component={Chat} />

@@ -56,13 +56,16 @@ export default function Setup() {
   };
 
   const agentScript = registrationData ? `
+# Set environment variables
 export DGON_API="${window.location.origin}/api"
 export NODE_ID="${registrationData.nodeId}"
 export REGION="${region}"
 export NODE_TOKEN="${registrationData.nodeToken}"
 
-# Download and run the agent
-curl -O https://raw.githubusercontent.com/dgon-network/agent/main/agent_mac_dev.py
+# Download the agent script from DGON Console
+curl -O ${window.location.origin}/agent_mac_dev.py
+
+# Run the agent
 python3 agent_mac_dev.py
 `.trim() : "";
 

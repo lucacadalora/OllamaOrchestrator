@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
@@ -53,7 +53,7 @@ function requireRole(...allowedRoles: string[]) {
   };
 }
 
-export async function registerRoutes(app: Express): Promise<Server> {
+export async function registerRoutes(app: Express, sessionParser: RequestHandler): Promise<Server> {
   // Auth routes
   app.post("/api/v1/auth/register", async (req, res) => {
     try {
@@ -998,8 +998,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return;
     }
     
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
+    // Create a minimal response stub for session parser
+    const resStub = {
+      getHeader: () => undefined,
+      setHeader: () => {},
+      headersSent: false,
+      writeHead: () => {},
+      end: () => {}
+    };
+    
+    // Parse session from cookie
+    sessionParser(request as any, resStub as any, () => {
+      // Require authentication for frontend WebSocket connections
+      const url = new URL(request.url || "", `http://${request.headers.host}`);
+      const isAgentConnection = url.searchParams.has("nodeId") && url.searchParams.has("token");
+      
+      if (!isAgentConnection && !(request as any).session?.userId) {
+        // Reject unauthenticated WebSocket connections
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
     });
   });
   
@@ -1064,10 +1087,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const message = JSON.parse(data.toString());
         
         if (message.type === "inference_request") {
-          // Create inference request
+          // Extract userId from session
+          const userId = (req as any).session?.userId;
+          
+          // Ensure user is authenticated
+          if (!userId) {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              error: "Authentication required" 
+            }));
+            ws.close(1008, "Authentication required");
+            return;
+          }
+          
+          // Create inference request with userId
           const request = await storage.createInferenceRequest(
             message.model,
-            message.messages
+            message.messages,
+            userId
           );
           
           // Send request ID back to client

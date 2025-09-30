@@ -9,20 +9,20 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Session configuration
-app.use(
-  session({
-    name: "dgon.sid",
-    secret: process.env.SESSION_SECRET || "dgon-secret-key-change-in-prod",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === "production",
-      httpOnly: true,
-      sameSite: "lax",
-      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
-    },
-  })
-);
+const sessionParser = session({
+  name: "dgon.sid",
+  secret: process.env.SESSION_SECRET || "dgon-secret-key-change-in-prod",
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === "production",
+    httpOnly: true,
+    sameSite: "lax",
+    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+  },
+});
+
+app.use(sessionParser);
 
 declare module 'http' {
   interface IncomingMessage {
@@ -74,7 +74,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  const server = await registerRoutes(app);
+  const server = await registerRoutes(app, sessionParser);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

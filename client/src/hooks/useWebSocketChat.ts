@@ -35,12 +35,14 @@ export function useWebSocketChat() {
       try {
         const data = JSON.parse(event.data);
 
-        if (data.type === "stream_chunk") {
-          setCurrentResponse(data.response);
+        if (data.type === "chunk" || data.type === "stream_chunk") {
+          // Append chunk to current response
+          setCurrentResponse(prev => prev + data.chunk);
           setIsStreaming(!data.done);
           
           if (data.done) {
             setCurrentResponse("");
+            setIsStreaming(false);
           }
         } else if (data.type === "request_created") {
           console.log("Request created:", data.requestId);

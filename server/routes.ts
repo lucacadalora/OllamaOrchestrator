@@ -809,18 +809,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             newResponse
           );
           
-          // Forward chunk to ALL active WebSocket connections looking for this request
+          // Forward chunk to the specific WebSocket connection for this request
           const wsConnections = (app as any).wsConnections as Map<string, WebSocket>;
-          wsConnections.forEach((ws, connectionId) => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({
-                type: "chunk",
-                requestId: id,
-                chunk,
-                done
-              }));
-            }
-          });
+          const ws = wsConnections.get(id);
+          
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: "chunk",
+              requestId: id,
+              chunk,
+              done
+            }));
+          }
         }
         
         res.json({ success: true });

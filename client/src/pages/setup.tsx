@@ -56,17 +56,18 @@ export default function Setup() {
   };
 
   const agentScript = registrationData ? `
-# Set environment variables
-export DGON_API="${window.location.origin}/api"
-export NODE_ID="${registrationData.nodeId}"
-export REGION="${region}"
-export NODE_TOKEN="${registrationData.nodeToken}"
+# Copy and paste this entire block into your terminal:
 
-# Download the agent script from DGON Console
-curl -O ${window.location.origin}/agent_mac_dev.py
-
-# Run the agent
-python3 agent_mac_dev.py
+DGON_API="${window.location.origin}/api" \\
+NODE_ID="${registrationData.nodeId}" \\
+REGION="${region}" \\
+NODE_TOKEN="${registrationData.nodeToken}" \\
+bash -c '
+  echo "📥 Downloading DGON agent..."
+  curl -s -O ${window.location.origin}/agent_mac_dev.py
+  echo "🚀 Starting DGON node agent..."
+  python3 -u agent_mac_dev.py
+'
 `.trim() : "";
 
   return (
@@ -127,19 +128,33 @@ python3 agent_mac_dev.py
                   <div className="flex-1">
                     <h4 className="font-medium text-foreground mb-2">Install Ollama</h4>
                     <p className="text-sm text-muted-foreground mb-3">
-                      Download and install Ollama on your Mac
+                      Download and install Ollama on your Mac, then pull a model
                     </p>
-                    <div className="flex items-center space-x-2">
-                      <code className="block p-3 bg-muted rounded-md font-mono text-sm flex-1">
-                        curl -fsSL https://ollama.ai/install.sh | sh
-                      </code>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyToClipboard("curl -fsSL https://ollama.ai/install.sh | sh")}
-                      >
-                        <Copy className="w-4 h-4" />
-                      </Button>
+                    <div className="space-y-2">
+                      <div className="flex items-center space-x-2">
+                        <a 
+                          href="https://ollama.com/download/mac"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 text-sm"
+                        >
+                          <Download className="w-4 h-4 mr-2" />
+                          Download Ollama for Mac
+                        </a>
+                      </div>
+                      <p className="text-xs text-muted-foreground">After installing, run in terminal:</p>
+                      <div className="flex items-center space-x-2">
+                        <code className="block p-3 bg-muted rounded-md font-mono text-sm flex-1">
+                          ollama pull llama3.2
+                        </code>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => copyToClipboard("ollama pull llama3.2")}
+                        >
+                          <Copy className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>

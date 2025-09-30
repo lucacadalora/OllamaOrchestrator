@@ -108,9 +108,9 @@ export default function Chat() {
   const models = modelsData?.models || [];
 
   return (
-    <div className="flex h-full" data-testid="chat-page">
+    <div className="flex h-screen overflow-hidden" data-testid="chat-page">
       {/* Sidebar - Model Selection */}
-      <div className="w-80 border-r border-border bg-card">
+      <div className="w-80 border-r border-border bg-card overflow-y-auto">
         <div className="p-4">
           <h3 className="text-lg font-semibold mb-4">Available Models</h3>
           
@@ -192,8 +192,9 @@ export default function Chat() {
         </header>
 
         {/* Messages */}
-        <ScrollArea className="flex-1 p-6" ref={scrollAreaRef}>
-          {messages.length === 0 ? (
+        <div className="flex-1 overflow-hidden">
+          <ScrollArea className="h-full p-6" ref={scrollAreaRef}>
+            {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <Bot className="w-12 h-12 text-muted-foreground mb-4" />
               <h3 className="text-lg font-medium mb-2">Start a conversation</h3>
@@ -252,7 +253,8 @@ export default function Chat() {
               )}
             </div>
           )}
-        </ScrollArea>
+          </ScrollArea>
+        </div>
 
         {/* Input Area */}
         <div className="border-t border-border bg-card p-4">

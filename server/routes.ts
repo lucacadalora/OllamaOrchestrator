@@ -621,7 +621,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Inference routing endpoint
+  // Inference routing endpoint - Queue-based system
   app.post("/api/v1/inference/chat", requireAuth, async (req, res) => {
     try {
       const { model, messages } = req.body;
@@ -630,63 +630,102 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Model and messages required" });
       }
       
-      // Get active nodes with the requested model
+      // Check if any nodes have this model
       const activeNodes = await storage.listNodes({ status: "active" });
       const availableNodes = activeNodes.filter(node => 
-        node.models && node.models.includes(model) && node.ipAddress
+        node.models && node.models.includes(model)
       );
       
       if (availableNodes.length === 0) {
         return res.status(404).json({ error: "No nodes available with this model" });
       }
       
-      // Pick a random node for now (will implement proper load balancing later)
-      const selectedNode = availableNodes[Math.floor(Math.random() * availableNodes.length)];
+      // Create inference request in queue
+      const request = await storage.createInferenceRequest(model, messages);
       
-      try {
-        // Forward the request to the node's inference server
-        const nodeUrl = `http://${selectedNode.ipAddress}:7860/inference`;
+      // Poll for completion (max 30 seconds)
+      const startTime = Date.now();
+      const timeout = 30000;
+      
+      while (Date.now() - startTime < timeout) {
+        const updatedRequest = await storage.getRequestById(request.id);
         
-        const response = await fetch(nodeUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
+        if (updatedRequest?.status === "completed") {
+          return res.json({
+            nodeId: updatedRequest.nodeId,
             model,
-            messages,
-          }),
-          signal: AbortSignal.timeout(30000), // 30 second timeout
-        });
-
-        if (!response.ok) {
-          throw new Error(`Node responded with ${response.status}`);
+            response: updatedRequest.response,
+            done: true
+          });
+        } else if (updatedRequest?.status === "failed") {
+          return res.status(500).json({
+            error: updatedRequest.error || "Inference failed",
+            nodeId: updatedRequest.nodeId
+          });
         }
-
-        const result = await response.json();
         
-        // Return the AI response
-        res.json({ 
-          nodeId: selectedNode.id,
-          model,
-          response: result.response,
-          done: true
-        });
-        
-      } catch (nodeError) {
-        console.error(`Failed to reach node ${selectedNode.id}:`, nodeError);
-        // Try another node or fail
-        res.status(503).json({ 
-          error: "Failed to reach inference node",
-          nodeId: selectedNode.id 
-        });
+        // Wait a bit before polling again
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
+      
+      // Timeout
+      res.status(504).json({ error: "Request timeout - no nodes available" });
       
     } catch (error) {
       console.error("Inference routing error:", error);
       res.status(500).json({ error: "Failed to route inference request" });
     }
   });
+  
+  // Node polling endpoint - Get next inference request
+  app.get(
+    "/api/v1/inference/poll",
+    requireNodeAuth((nodeId) => storage.getNodeSecret(nodeId)),
+    async (req, res) => {
+      try {
+        const nodeId = req.nodeId!;
+        
+        // Get next pending request for this node
+        const request = await storage.getNextPendingRequest(nodeId);
+        
+        if (!request) {
+          return res.status(404).json({ message: "No pending requests" });
+        }
+        
+        res.json({
+          id: request.id,
+          model: request.model,
+          messages: request.messages
+        });
+        
+      } catch (error) {
+        console.error("Polling error:", error);
+        res.status(500).json({ error: "Failed to poll for requests" });
+      }
+    }
+  );
+  
+  // Node completion endpoint - Submit inference result
+  app.post(
+    "/api/v1/inference/complete",
+    requireNodeAuth((nodeId) => storage.getNodeSecret(nodeId)),
+    async (req, res) => {
+      try {
+        const { id, status, response, error } = req.body;
+        
+        if (!id || !status) {
+          return res.status(400).json({ error: "ID and status required" });
+        }
+        
+        await storage.updateRequestStatus(id, status, response, error);
+        res.json({ success: true });
+        
+      } catch (error) {
+        console.error("Completion error:", error);
+        res.status(500).json({ error: "Failed to complete request" });
+      }
+    }
+  );
 
   // List receipts - requires auth with RBAC
   app.get("/api/v1/receipts", requireAuth, async (req, res) => {

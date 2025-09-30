@@ -164,22 +164,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Node registration (admin/bootstrap)
-  app.post("/api/v1/nodes/register", async (req, res) => {
+  // Node registration (requires admin or operator role)
+  app.post("/api/v1/nodes/register", requireRole("admin", "operator"), async (req, res) => {
     try {
       const data = registerSchema.parse(req.body);
+      const userId = req.session.userId!;
       
       // Create or update node
       const existingNode = await storage.getNode(data.id);
       let node;
       
       if (existingNode) {
-        // Update existing node
+        // Update existing node - only owner or admin can do this
+        if (existingNode.userId !== userId && req.session.role !== "admin") {
+          return res.status(403).json({ error: "Cannot modify this node" });
+        }
         await storage.updateNodeStatus(data.id, "pending");
         node = { ...existingNode, ...data, status: "pending" };
       } else {
-        // Create new node
-        node = await storage.createNode(data);
+        // Create new node and link to user
+        node = await storage.createNode({ ...data, userId });
       }
 
       // Generate and store secret
@@ -257,11 +261,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
-  // List nodes (dashboard)
-  app.get("/api/v1/nodes", async (req, res) => {
+  // List nodes (dashboard) - requires auth with RBAC
+  app.get("/api/v1/nodes", requireAuth, async (req, res) => {
     try {
       const filters = nodeFiltersSchema.parse(req.query);
-      const nodes = await storage.listNodes(filters);
+      const role = req.session.role;
+      const userId = req.session.userId;
+      
+      // Apply role-based filtering
+      let nodeFilters = { ...filters };
+      if (role === "operator") {
+        // Operators only see their own nodes
+        nodeFilters.userId = userId;
+      }
+      // Admins and viewers see all nodes
+      
+      const nodes = await storage.listNodes(nodeFilters);
       // Convert reputation to number
       const serializedNodes = nodes.map(node => ({
         ...node,
@@ -274,13 +289,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get node details
-  app.get("/api/v1/nodes/:id", async (req, res) => {
+  // Get node details - requires auth with RBAC
+  app.get("/api/v1/nodes/:id", requireAuth, async (req, res) => {
     try {
       const node = await storage.getNode(req.params.id);
       if (!node) {
         return res.status(404).json({ error: "Node not found" });
       }
+      
+      // Check permissions
+      const role = req.session.role;
+      const userId = req.session.userId;
+      if (role === "operator" && node.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
       // Convert reputation to number
       const serializedNode = {
         ...node,
@@ -293,11 +316,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // List receipts
-  app.get("/api/v1/receipts", async (req, res) => {
+  // List receipts - requires auth with RBAC
+  app.get("/api/v1/receipts", requireAuth, async (req, res) => {
     try {
-      const nodeId = req.query.nodeId as string;
+      let nodeId = req.query.nodeId as string;
       const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+      const role = req.session.role;
+      const userId = req.session.userId;
+      
+      // For operators, only show receipts from their own nodes
+      if (role === "operator") {
+        if (nodeId) {
+          // Verify they own the specified node
+          const node = await storage.getNode(nodeId);
+          if (!node || node.userId !== userId) {
+            return res.status(403).json({ error: "Access denied" });
+          }
+        } else {
+          // Get all their nodes and filter receipts
+          const userNodes = await storage.listNodes({ userId });
+          if (userNodes.length === 0) {
+            return res.json([]);
+          }
+          // For now, if they don't specify a node, return empty
+          // TODO: extend storage to support filtering receipts by multiple nodeIds
+          return res.json([]);
+        }
+      }
       
       const receipts = await storage.listReceipts({ nodeId, limit });
       res.json(receipts);

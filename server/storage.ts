@@ -1,4 +1,4 @@
-import { nodes, nodeSecrets, receipts, earnings, users, type Node, type InsertNode, type NodeSecret, type Receipt, type InsertReceipt, type Earning, type User, type InsertUser } from "@shared/schema";
+import { nodes, nodeSecrets, receipts, earnings, users, inferenceQueue, type Node, type InsertNode, type NodeSecret, type Receipt, type InsertReceipt, type Earning, type User, type InsertUser, type InferenceRequest } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, gte } from "drizzle-orm";
 
@@ -37,6 +37,12 @@ export interface IStorage {
     avgP95: number | null;
     requests24h: number;
   }>;
+  
+  // Inference queue operations
+  createInferenceRequest(model: string, messages: any[]): Promise<InferenceRequest>;
+  getNextPendingRequest(nodeId: string): Promise<InferenceRequest | undefined>;
+  updateRequestStatus(id: string, status: string, response?: string, error?: string): Promise<void>;
+  getRequestById(id: string): Promise<InferenceRequest | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -257,6 +263,80 @@ export class DatabaseStorage implements IStorage {
       .update(earnings)
       .set({ payoutReady: ready })
       .where(eq(earnings.id, earningId));
+  }
+  
+  async createInferenceRequest(model: string, messages: any[]): Promise<InferenceRequest> {
+    const [request] = await db
+      .insert(inferenceQueue)
+      .values({
+        model,
+        messages,
+        status: "pending"
+      })
+      .returning();
+    return request;
+  }
+  
+  async getNextPendingRequest(nodeId: string): Promise<InferenceRequest | undefined> {
+    // Get pending requests for models this node has
+    const node = await this.getNode(nodeId);
+    if (!node || !node.models || node.models.length === 0) {
+      return undefined;
+    }
+    
+    // Find oldest pending request for models this node supports
+    const pendingRequests = await db
+      .select()
+      .from(inferenceQueue)
+      .where(eq(inferenceQueue.status, "pending"))
+      .orderBy(inferenceQueue.createdAt);
+    
+    // Find first request that matches node's models
+    for (const request of pendingRequests) {
+      if (node.models.includes(request.model)) {
+        // Mark it as processing and assign to this node
+        await db
+          .update(inferenceQueue)
+          .set({
+            status: "processing",
+            nodeId: nodeId,
+            updatedAt: new Date()
+          })
+          .where(eq(inferenceQueue.id, request.id));
+        
+        return request;
+      }
+    }
+    
+    return undefined;
+  }
+  
+  async updateRequestStatus(id: string, status: string, response?: string, error?: string): Promise<void> {
+    const updateData: any = {
+      status,
+      updatedAt: new Date()
+    };
+    
+    if (response !== undefined) {
+      updateData.response = response;
+    }
+    
+    if (error !== undefined) {
+      updateData.error = error;
+    }
+    
+    await db
+      .update(inferenceQueue)
+      .set(updateData)
+      .where(eq(inferenceQueue.id, id));
+  }
+  
+  async getRequestById(id: string): Promise<InferenceRequest | undefined> {
+    const [request] = await db
+      .select()
+      .from(inferenceQueue)
+      .where(eq(inferenceQueue.id, id));
+    return request || undefined;
   }
 }
 

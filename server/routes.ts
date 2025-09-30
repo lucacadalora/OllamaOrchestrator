@@ -247,10 +247,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ error: "Node not found" });
         }
 
-        // Get node's IP address from request
-        const ipAddress = req.headers['x-forwarded-for'] as string || 
-                         req.socket.remoteAddress || 
-                         'unknown';
+        // Get node's IP address from request (take first IP if multiple)
+        let ipAddress = req.headers['x-forwarded-for'] as string || 
+                       req.socket.remoteAddress || 
+                       'unknown';
+        
+        // If x-forwarded-for contains multiple IPs, take the first one
+        if (ipAddress.includes(',')) {
+          ipAddress = ipAddress.split(',')[0].trim();
+        }
+        
+        // Remove IPv6 prefix if present
+        if (ipAddress.startsWith('::ffff:')) {
+          ipAddress = ipAddress.substring(7);
+        }
 
         // Update status based on readiness and update models list
         const newStatus = data.ready ? "active" : "pending";

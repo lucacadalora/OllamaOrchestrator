@@ -51,6 +51,18 @@ export const earnings = pgTable("earnings", {
   payoutReady: boolean("payout_ready").default(false),
 });
 
+export const inferenceQueue = pgTable("inference_queue", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  nodeId: text("node_id").references(() => nodes.id),
+  model: text("model").notNull(),
+  messages: jsonb("messages").notNull(),
+  status: text("status").notNull().default("pending"), // pending, processing, completed, failed
+  response: text("response"),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
@@ -83,6 +95,7 @@ export type NodeSecret = typeof nodeSecrets.$inferSelect;
 export type Receipt = typeof receipts.$inferSelect;
 export type InsertReceipt = z.infer<typeof insertReceiptSchema>;
 export type Earning = typeof earnings.$inferSelect;
+export type InferenceRequest = typeof inferenceQueue.$inferSelect;
 
 // Enums
 export const RuntimeEnum = z.enum(["ollama", "vllm", "tensorrtllm", "tgi"]);

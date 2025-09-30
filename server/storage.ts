@@ -11,7 +11,7 @@ export interface IStorage {
   // Node operations
   createNode(node: InsertNode & { userId?: string }): Promise<Node>;
   getNode(id: string): Promise<Node | undefined>;
-  updateNodeStatus(id: string, status: string): Promise<void>;
+  updateNodeStatus(id: string, status: string, ipAddress?: string): Promise<void>;
   updateNodeHeartbeat(id: string): Promise<void>;
   listNodes(filters?: { status?: string; region?: string; runtime?: string; userId?: string }): Promise<Node[]>;
   
@@ -80,10 +80,14 @@ export class DatabaseStorage implements IStorage {
     return node || undefined;
   }
 
-  async updateNodeStatus(id: string, status: string): Promise<void> {
+  async updateNodeStatus(id: string, status: string, ipAddress?: string): Promise<void> {
+    const updateData: any = { status, lastHeartbeat: new Date() };
+    if (ipAddress) {
+      updateData.ipAddress = ipAddress;
+    }
     await db
       .update(nodes)
-      .set({ status, lastHeartbeat: new Date() })
+      .set(updateData)
       .where(eq(nodes.id, id));
   }
 

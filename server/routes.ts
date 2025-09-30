@@ -247,9 +247,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ error: "Node not found" });
         }
 
+        // Get node's IP address from request
+        const ipAddress = req.headers['x-forwarded-for'] as string || 
+                         req.socket.remoteAddress || 
+                         'unknown';
+
         // Update status based on readiness and update models list
         const newStatus = data.ready ? "active" : "pending";
-        await storage.updateNodeStatus(nodeId, newStatus);
+        await storage.updateNodeStatus(nodeId, newStatus, ipAddress);
         await storage.updateNodeHeartbeat(nodeId, data.models || []);
 
         res.json({ status: newStatus, models: data.models || [] });
@@ -618,7 +623,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get active nodes with the requested model
       const activeNodes = await storage.listNodes({ status: "active" });
       const availableNodes = activeNodes.filter(node => 
-        node.models && node.models.includes(model)
+        node.models && node.models.includes(model) && node.ipAddress
       );
       
       if (availableNodes.length === 0) {
@@ -628,13 +633,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Pick a random node for now (will implement proper load balancing later)
       const selectedNode = availableNodes[Math.floor(Math.random() * availableNodes.length)];
       
-      // For now, return node selection (will implement actual inference request later)
-      res.json({ 
-        nodeId: selectedNode.id,
-        model,
-        status: "routing",
-        message: "Request routed to node (inference not yet implemented)"
-      });
+      try {
+        // Forward the request to the node's inference server
+        const nodeUrl = `http://${selectedNode.ipAddress}:7860/inference`;
+        
+        const response = await fetch(nodeUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+          }),
+          signal: AbortSignal.timeout(30000), // 30 second timeout
+        });
+
+        if (!response.ok) {
+          throw new Error(`Node responded with ${response.status}`);
+        }
+
+        const result = await response.json();
+        
+        // Return the AI response
+        res.json({ 
+          nodeId: selectedNode.id,
+          model,
+          response: result.response,
+          done: true
+        });
+        
+      } catch (nodeError) {
+        console.error(`Failed to reach node ${selectedNode.id}:`, nodeError);
+        // Try another node or fail
+        res.status(503).json({ 
+          error: "Failed to reach inference node",
+          nodeId: selectedNode.id 
+        });
+      }
       
     } catch (error) {
       console.error("Inference routing error:", error);

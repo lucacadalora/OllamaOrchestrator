@@ -22,6 +22,7 @@ export const nodes = pgTable("nodes", {
   asnHint: text("asn_hint"),
   walletAddress: text("wallet_address"),
   models: text().array().default(sql`ARRAY[]::text[]`),
+  ipAddress: text("ip_address"),
   lastHeartbeat: timestamp("last_heartbeat", { withTimezone: true }).defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });

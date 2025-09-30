@@ -39,15 +39,20 @@ export default function Login() {
       const res = await apiRequest("POST", endpoint, data);
       return await res.json();
     },
-    onSuccess: () => {
-      // Invalidate auth query to refetch user data
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/auth/me"] });
+    onSuccess: async () => {
+      // Invalidate and wait for auth query to refetch user data
+      await queryClient.invalidateQueries({ queryKey: ["/api/v1/auth/me"] });
+      await queryClient.refetchQueries({ queryKey: ["/api/v1/auth/me"] });
       
       toast({
         title: isRegister ? "Account created" : "Login successful",
         description: `Welcome to DGON Console`,
       });
-      setLocation("/");
+      
+      // Small delay to ensure state is updated
+      setTimeout(() => {
+        setLocation("/");
+      }, 100);
     },
     onError: (error: any) => {
       toast({

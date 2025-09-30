@@ -1,0 +1,160 @@
+import { nodes, nodeSecrets, receipts, earnings, type Node, type InsertNode, type NodeSecret, type Receipt, type InsertReceipt, type Earning } from "@shared/schema";
+import { db } from "./db";
+import { eq, desc, and, gte } from "drizzle-orm";
+
+export interface IStorage {
+  // Node operations
+  createNode(node: InsertNode): Promise<Node>;
+  getNode(id: string): Promise<Node | undefined>;
+  updateNodeStatus(id: string, status: string): Promise<void>;
+  updateNodeHeartbeat(id: string): Promise<void>;
+  listNodes(filters?: { status?: string; region?: string; runtime?: string }): Promise<Node[]>;
+  
+  // Node secrets
+  createNodeSecret(nodeId: string, secret: string): Promise<void>;
+  getNodeSecret(nodeId: string): Promise<string | undefined>;
+  
+  // Receipts
+  createReceipt(receipt: InsertReceipt): Promise<Receipt>;
+  listReceipts(filters?: { nodeId?: string; limit?: number }): Promise<Receipt[]>;
+  
+  // Summary data
+  getSummary(): Promise<{
+    activeNodes: number;
+    totalNodes: number;
+    avgP95: number | null;
+    requests24h: number;
+  }>;
+}
+
+export class DatabaseStorage implements IStorage {
+  async createNode(insertNode: InsertNode): Promise<Node> {
+    const [node] = await db
+      .insert(nodes)
+      .values(insertNode)
+      .returning();
+    return node;
+  }
+
+  async getNode(id: string): Promise<Node | undefined> {
+    const [node] = await db
+      .select()
+      .from(nodes)
+      .where(eq(nodes.id, id));
+    return node || undefined;
+  }
+
+  async updateNodeStatus(id: string, status: string): Promise<void> {
+    await db
+      .update(nodes)
+      .set({ status, lastHeartbeat: new Date() })
+      .where(eq(nodes.id, id));
+  }
+
+  async updateNodeHeartbeat(id: string): Promise<void> {
+    await db
+      .update(nodes)
+      .set({ lastHeartbeat: new Date() })
+      .where(eq(nodes.id, id));
+  }
+
+  async listNodes(filters?: { status?: string; region?: string; runtime?: string }): Promise<Node[]> {
+    const conditions = [];
+    if (filters?.status) {
+      conditions.push(eq(nodes.status, filters.status));
+    }
+    if (filters?.region) {
+      conditions.push(eq(nodes.region, filters.region));
+    }
+    if (filters?.runtime) {
+      conditions.push(eq(nodes.runtime, filters.runtime));
+    }
+    
+    if (conditions.length > 0) {
+      return await db.select().from(nodes).where(and(...conditions)).orderBy(desc(nodes.lastHeartbeat));
+    }
+    
+    return await db.select().from(nodes).orderBy(desc(nodes.lastHeartbeat));
+  }
+
+  async createNodeSecret(nodeId: string, secret: string): Promise<void> {
+    await db
+      .insert(nodeSecrets)
+      .values({ nodeId, secret })
+      .onConflictDoUpdate({
+        target: nodeSecrets.nodeId,
+        set: { secret }
+      });
+  }
+
+  async getNodeSecret(nodeId: string): Promise<string | undefined> {
+    const [secret] = await db
+      .select()
+      .from(nodeSecrets)
+      .where(eq(nodeSecrets.nodeId, nodeId));
+    return secret?.secret;
+  }
+
+  async createReceipt(insertReceipt: InsertReceipt): Promise<Receipt> {
+    const [receipt] = await db
+      .insert(receipts)
+      .values(insertReceipt)
+      .returning();
+    return receipt;
+  }
+
+  async listReceipts(filters?: { nodeId?: string; limit?: number }): Promise<Receipt[]> {
+    if (filters?.nodeId) {
+      if (filters.limit) {
+        return await db.select().from(receipts).where(eq(receipts.nodeId, filters.nodeId)).orderBy(desc(receipts.createdAt)).limit(filters.limit);
+      }
+      return await db.select().from(receipts).where(eq(receipts.nodeId, filters.nodeId)).orderBy(desc(receipts.createdAt));
+    }
+    
+    if (filters?.limit) {
+      return await db.select().from(receipts).orderBy(desc(receipts.createdAt)).limit(filters.limit);
+    }
+    
+    return await db.select().from(receipts).orderBy(desc(receipts.createdAt));
+  }
+
+  async getSummary(): Promise<{
+    activeNodes: number;
+    totalNodes: number;
+    avgP95: number | null;
+    requests24h: number;
+  }> {
+    const totalNodes = await db.$count(nodes);
+    const activeNodes = await db.$count(nodes, eq(nodes.status, "active"));
+    
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentReceipts = await db
+      .select()
+      .from(receipts)
+      .where(gte(receipts.createdAt, twentyFourHoursAgo));
+    
+    const requests24h = recentReceipts.length;
+    
+    // Calculate average P95 from recent receipts
+    let avgP95 = null;
+    if (recentReceipts.length > 0) {
+      const p95Values = recentReceipts
+        .map(r => r.payload as any)
+        .filter(p => p?.p95_ms)
+        .map(p => p.p95_ms);
+      
+      if (p95Values.length > 0) {
+        avgP95 = Math.round(p95Values.reduce((a, b) => a + b, 0) / p95Values.length);
+      }
+    }
+    
+    return {
+      activeNodes,
+      totalNodes,
+      avgP95,
+      requests24h
+    };
+  }
+}
+
+export const storage = new DatabaseStorage();

@@ -1,0 +1,219 @@
+import { useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Laptop, Server, Monitor, Download, Copy, CheckCircle } from "lucide-react";
+import { useMutation } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+
+interface RegistrationResponse {
+  status: string;
+  nodeId: string;
+  nodeToken: string;
+}
+
+export default function Setup() {
+  const [nodeId, setNodeId] = useState(`macbook-${Math.random().toString(36).substr(2, 9)}`);
+  const [region, setRegion] = useState("ap-southeast");
+  const [registrationData, setRegistrationData] = useState<RegistrationResponse | null>(null);
+  const { toast } = useToast();
+
+  const registerMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/v1/nodes/register", {
+        id: nodeId,
+        region,
+        runtime: "ollama",
+        asnHint: "residential",
+        walletAddress: "",
+        greenEnergy: false,
+      });
+      return response.json();
+    },
+    onSuccess: (data: RegistrationResponse) => {
+      setRegistrationData(data);
+      toast({
+        title: "Node Registered",
+        description: "Your node has been successfully registered!",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Registration Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast({
+      title: "Copied!",
+      description: "Command copied to clipboard",
+    });
+  };
+
+  const agentScript = registrationData ? `
+export DGON_API="${window.location.origin}/api"
+export NODE_ID="${registrationData.nodeId}"
+export REGION="${region}"
+export NODE_TOKEN="${registrationData.nodeToken}"
+
+# Download and run the agent
+curl -O https://raw.githubusercontent.com/dgon-network/agent/main/agent_mac_dev.py
+python3 agent_mac_dev.py
+`.trim() : "";
+
+  return (
+    <div data-testid="setup-page">
+      <header className="bg-card border-b border-border px-6 py-4">
+        <h2 className="text-2xl font-semibold text-foreground">Run a Node</h2>
+        <p className="text-muted-foreground">Set up your machine as a DGON compute node</p>
+      </header>
+
+      <div className="p-6">
+        <div className="max-w-4xl">
+          {/* Platform Selection */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <Card className="text-center cursor-pointer border-2 border-primary bg-primary/5">
+              <CardContent className="p-6">
+                <div className="w-16 h-16 bg-primary/10 rounded-lg flex items-center justify-center mx-auto mb-4">
+                  <Laptop className="w-8 h-8 text-primary" />
+                </div>
+                <h3 className="font-semibold text-foreground mb-2">macOS</h3>
+                <p className="text-sm text-muted-foreground">MacBook with Ollama</p>
+                <Badge className="mt-2 bg-primary text-primary-foreground">Supported</Badge>
+              </CardContent>
+            </Card>
+
+            <Card className="text-center opacity-50">
+              <CardContent className="p-6">
+                <div className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center mx-auto mb-4">
+                  <Server className="w-8 h-8 text-muted-foreground" />
+                </div>
+                <h3 className="font-semibold text-muted-foreground mb-2">Linux</h3>
+                <p className="text-sm text-muted-foreground">Coming soon</p>
+              </CardContent>
+            </Card>
+
+            <Card className="text-center opacity-50">
+              <CardContent className="p-6">
+                <div className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center mx-auto mb-4">
+                  <Monitor className="w-8 h-8 text-muted-foreground" />
+                </div>
+                <h3 className="font-semibold text-muted-foreground mb-2">Windows</h3>
+                <p className="text-sm text-muted-foreground">Coming soon</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Setup Steps */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Quick Setup (macOS)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-6">
+                {/* Step 1: Install Ollama */}
+                <div className="flex items-start space-x-4">
+                  <div className="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-sm font-medium flex-shrink-0">
+                    1
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-medium text-foreground mb-2">Install Ollama</h4>
+                    <p className="text-sm text-muted-foreground mb-3">
+                      Download and install Ollama on your Mac
+                    </p>
+                    <div className="flex items-center space-x-2">
+                      <code className="block p-3 bg-muted rounded-md font-mono text-sm flex-1">
+                        curl -fsSL https://ollama.ai/install.sh | sh
+                      </code>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => copyToClipboard("curl -fsSL https://ollama.ai/install.sh | sh")}
+                      >
+                        <Copy className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Step 2: Register Node */}
+                <div className="flex items-start space-x-4">
+                  <div className="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-sm font-medium flex-shrink-0">
+                    2
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-medium text-foreground mb-2">Register Your Node</h4>
+                    <p className="text-sm text-muted-foreground mb-3">
+                      Register your Mac as a compute node in the network
+                    </p>
+                    <div className="flex items-center space-x-2 mb-3">
+                      <input
+                        type="text"
+                        value={nodeId}
+                        onChange={(e) => setNodeId(e.target.value)}
+                        className="px-3 py-2 border border-border rounded-md text-sm bg-background flex-1"
+                        placeholder="Node ID"
+                      />
+                      <select
+                        value={region}
+                        onChange={(e) => setRegion(e.target.value)}
+                        className="px-3 py-2 border border-border rounded-md text-sm bg-background"
+                      >
+                        <option value="ap-southeast">ap-southeast</option>
+                        <option value="us-west">us-west</option>
+                        <option value="eu-central">eu-central</option>
+                      </select>
+                    </div>
+                    <Button
+                      onClick={() => registerMutation.mutate()}
+                      disabled={registerMutation.isPending || !!registrationData}
+                      data-testid="register-node"
+                    >
+                      {registerMutation.isPending ? "Registering..." : 
+                       registrationData ? <><CheckCircle className="w-4 h-4 mr-2" />Registered</> : "Register Node"}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Step 3: Run Agent */}
+                {registrationData && (
+                  <div className="flex items-start space-x-4">
+                    <div className="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-sm font-medium flex-shrink-0">
+                      3
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-medium text-foreground mb-2">Run the Agent</h4>
+                      <p className="text-sm text-muted-foreground mb-3">
+                        Start the agent with your node configuration
+                      </p>
+                      <div className="flex items-center space-x-2">
+                        <pre className="block p-3 bg-muted rounded-md font-mono text-sm flex-1 overflow-x-auto">
+                          {agentScript}
+                        </pre>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => copyToClipboard(agentScript)}
+                        >
+                          <Copy className="w-4 h-4" />
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Keep the terminal open while running the agent. Your node will appear in the Nodes tab once connected.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -10,8 +10,11 @@ import hmac
 import hashlib
 import json
 import sys
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 
 # Configuration from environment variables
 API_BASE = os.getenv("DGON_API", "http://localhost:5000/api")
@@ -131,6 +134,101 @@ def send_heartbeat(token, ready, model_count=0, model_names=None):
         log(f"✗ Connection error: {e.reason}", RED)
         return False
 
+class InferenceHandler(BaseHTTPRequestHandler):
+    """HTTP handler for inference requests from the DGON console"""
+    
+    def log_message(self, format, *args):
+        """Override to suppress default HTTP server logs"""
+        pass
+    
+    def do_POST(self):
+        """Handle inference requests"""
+        if self.path == '/inference':
+            try:
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                request = json.loads(post_data.decode('utf-8'))
+                
+                model = request.get('model', 'llama3.2')
+                messages = request.get('messages', [])
+                
+                # Convert messages to Ollama format
+                prompt = ""
+                for msg in messages:
+                    role = msg.get('role', 'user')
+                    content = msg.get('content', '')
+                    if role == 'system':
+                        prompt = f"System: {content}\n\n{prompt}"
+                    elif role == 'user':
+                        prompt += f"User: {content}\n\n"
+                    elif role == 'assistant':
+                        prompt += f"Assistant: {content}\n\n"
+                
+                prompt += "Assistant: "
+                
+                # Call Ollama API
+                ollama_data = {
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False
+                }
+                
+                ollama_req = Request(
+                    "http://127.0.0.1:11434/api/generate",
+                    data=json.dumps(ollama_data).encode('utf-8'),
+                    headers={'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                
+                with urlopen(ollama_req, timeout=30) as ollama_response:
+                    result = json.loads(ollama_response.read().decode())
+                    
+                    # Send response back
+                    response = {
+                        "response": result.get("response", ""),
+                        "done": True,
+                        "model": model
+                    }
+                    
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(response).encode('utf-8'))
+                    
+                    # Log the inference
+                    log(f"✓ Inference completed for model {model}", GREEN)
+                    
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                error_response = {"error": str(e)}
+                self.wfile.write(json.dumps(error_response).encode('utf-8'))
+                log(f"✗ Inference error: {e}", RED)
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def do_GET(self):
+        """Health check endpoint"""
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def start_inference_server(port=7860):
+    """Start the HTTP server for inference requests"""
+    try:
+        server = HTTPServer(('0.0.0.0', port), InferenceHandler)
+        log(f"✓ Inference server started on port {port}", GREEN)
+        server.serve_forever()
+    except Exception as e:
+        log(f"✗ Failed to start inference server: {e}", RED)
+
 def send_test_receipt(token):
     """Send a test receipt (optional - for testing)"""
     receipt_id = f"r_test_{int(time.time())}"
@@ -214,7 +312,7 @@ Configuration:
         log(f"⚠ Ollama is not ready (no models loaded or not running)", YELLOW)
         log(f"  Start Ollama and load a model to activate this node", YELLOW)
     
-    # Send initial heartbeat
+    # Send initial heartbeat  
     send_heartbeat(token, ready, model_count, model_names)
     
     # Optional: Send test receipt on first run
@@ -223,8 +321,14 @@ Configuration:
         log(f"Sending test receipt...", BLUE)
         send_test_receipt(token)
     
+    # Start inference server in background thread
+    inference_port = 7860
+    inference_thread = threading.Thread(target=start_inference_server, args=(inference_port,), daemon=True)
+    inference_thread.start()
+    
     log(f"", "")
     log(f"🔄 Starting heartbeat loop (every 10 seconds)...", BLUE)
+    log(f"   Inference server listening on port {inference_port}", BLUE)
     log(f"   Press Ctrl+C to stop", BLUE)
     log(f"", "")
     

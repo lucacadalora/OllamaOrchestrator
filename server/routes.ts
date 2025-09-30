@@ -813,7 +813,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const wsConnections = (app as any).wsConnections as Map<string, WebSocket>;
           const ws = wsConnections.get(id);
           
-          console.log(`[HTTP Stream] Request ${id}: chunk="${chunk?.substring(0, 20)}...", hasWS=${!!ws}, wsReady=${ws?.readyState === WebSocket.OPEN}, totalConnections=${wsConnections.size}`);
+          console.log(`[HTTP Stream] Request ${id}: chunk="${chunk?.substring(0, 20)}...", done=${done}, hasWS=${!!ws}, wsReady=${ws?.readyState === WebSocket.OPEN}, totalConnections=${wsConnections.size}`);
           
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
@@ -823,6 +823,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
               done
             }));
             console.log(`[HTTP Stream] Sent chunk to frontend for request ${id}`);
+            
+            // Clean up request mapping when streaming is complete
+            if (done) {
+              wsConnections.delete(id);
+              console.log(`[HTTP Stream] Cleaned up request ${id}, remaining connections: ${wsConnections.size}`);
+            }
           } else {
             console.log(`[HTTP Stream] No valid WebSocket for request ${id}`);
           }
@@ -925,6 +931,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 chunk: message.chunk,
                 done: message.done
               }));
+              
+              // Clean up request mapping when streaming is complete
+              if (message.done) {
+                requestConnections.delete(message.requestId);
+                console.log(`[Agent WS] Cleaned up request ${message.requestId}, remaining connections: ${requestConnections.size}`);
+              }
             }
           }
         } catch (error) {

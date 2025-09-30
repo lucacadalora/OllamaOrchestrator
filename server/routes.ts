@@ -577,6 +577,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get available models from active nodes
+  app.get("/api/v1/models", requireAuth, async (req, res) => {
+    try {
+      const activeNodes = await storage.listNodes({ status: "active" });
+      const modelsMap = new Map<string, string[]>();
+      
+      activeNodes.forEach(node => {
+        const models = node.models || [];
+        models.forEach(model => {
+          if (!modelsMap.has(model)) {
+            modelsMap.set(model, []);
+          }
+          modelsMap.get(model)!.push(node.id);
+        });
+      });
+      
+      const availableModels = Array.from(modelsMap.entries()).map(([model, nodeIds]) => ({
+        model,
+        nodeCount: nodeIds.length,
+        nodes: nodeIds
+      }));
+      
+      res.json({ models: availableModels });
+    } catch (error) {
+      console.error("Models fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch models" });
+    }
+  });
+
+  // Inference routing endpoint
+  app.post("/api/v1/inference/chat", requireAuth, async (req, res) => {
+    try {
+      const { model, messages } = req.body;
+      
+      if (!model || !messages) {
+        return res.status(400).json({ error: "Model and messages required" });
+      }
+      
+      // Get active nodes with the requested model
+      const activeNodes = await storage.listNodes({ status: "active" });
+      const availableNodes = activeNodes.filter(node => 
+        node.models && node.models.includes(model)
+      );
+      
+      if (availableNodes.length === 0) {
+        return res.status(404).json({ error: "No nodes available with this model" });
+      }
+      
+      // Pick a random node for now (will implement proper load balancing later)
+      const selectedNode = availableNodes[Math.floor(Math.random() * availableNodes.length)];
+      
+      // For now, return node selection (will implement actual inference request later)
+      res.json({ 
+        nodeId: selectedNode.id,
+        model,
+        status: "routing",
+        message: "Request routed to node (inference not yet implemented)"
+      });
+      
+    } catch (error) {
+      console.error("Inference routing error:", error);
+      res.status(500).json({ error: "Failed to route inference request" });
+    }
+  });
+
   // List receipts - requires auth with RBAC
   app.get("/api/v1/receipts", requireAuth, async (req, res) => {
     try {

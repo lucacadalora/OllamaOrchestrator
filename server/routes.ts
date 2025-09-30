@@ -809,19 +809,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             newResponse
           );
           
-          // Send via WebSocket if connection exists for instant streaming
+          // Forward chunk to ALL active WebSocket connections looking for this request
           const wsConnections = (app as any).wsConnections as Map<string, WebSocket>;
-          const ws = wsConnections.get(id);
-          
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: "stream_chunk",
-              requestId: id,
-              chunk,
-              response: newResponse,
-              done
-            }));
-          }
+          wsConnections.forEach((ws, connectionId) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: "chunk",
+                requestId: id,
+                chunk,
+                done
+              }));
+            }
+          });
         }
         
         res.json({ success: true });

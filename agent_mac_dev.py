@@ -193,11 +193,11 @@ def poll_for_inference_requests(token):
                         for line in ollama_response:
                             if line:
                                 chunk = json.loads(line.decode())
-                                token = chunk.get("response", "")
-                                full_response += token
+                                text_chunk = chunk.get("response", "")
+                                full_response += text_chunk
                                 
                                 # Send chunk immediately for real-time display
-                                submit_inference_chunk(token, request_id, token, chunk.get("done", False))
+                                submit_inference_chunk(token, request_id, text_chunk, chunk.get("done", False))
                         
                         # Send final complete response
                         submit_inference_response(token, request_id, full_response)

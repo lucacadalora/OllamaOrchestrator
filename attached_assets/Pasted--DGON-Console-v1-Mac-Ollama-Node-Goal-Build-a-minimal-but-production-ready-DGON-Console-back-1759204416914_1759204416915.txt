@@ -1,0 +1,198 @@
+“DGON Console v1 (Mac + Ollama Node)”
+
+Goal: Build a minimal-but-production-ready DGON Console (backend + dashboard) that:
+
+Registers a node (MacBook running Ollama)
+
+Verifies it via signed heartbeats and a local Ollama readiness check
+
+Displays it in the dashboard as Connected / Active
+
+Ingests receipts for future billing/audits
+
+Key Outcomes (must have)
+
+Node appears in the Nodes page within ≤60s of agent start.
+
+Status flips from pending → active once Ollama is ready.
+
+Dashboard shows Active Nodes count and the node row with status, region, runtime, last heartbeat.
+
+API verifies HMAC on heartbeats/receipts (i.e., only registered nodes can post).
+
+Architecture
+
+Frontend: Next.js 14 (App Router), TypeScript; simple “Overview” + “Nodes” pages.
+
+Backend: FastAPI (Python) or Node/Express; expose REST endpoints; store in SQLite (dev) with easy switch to Postgres later.
+
+Agent (dev): A tiny Python script on the Mac that:
+
+Calls /v1/nodes/register once, gets back a node_token (secret)
+
+Checks Ollama readiness at http://127.0.0.1:11434/api/tags
+
+Posts heartbeats every 10s to /v1/nodes/heartbeat with HMAC headers
+
+(Optional) Posts a sample receipt to /v1/receipts
+
+Data Model (minimal)
+
+nodes: id (string), region, runtime (ollama|vllm|tensorrtllm|tgi), status (pending|active|offline|quarantine), reputation (float, default 60), green_energy (bool), asn_hint (string), wallet_address (string), last_heartbeat (timestamptz), created_at (timestamptz)
+node_secrets: node_id (string, pk), secret (string)
+receipts: id (string, request_id, pk), node_id, region, model_id, payload (jsonb), created_at
+
+API (must implement)
+
+POST /v1/nodes/register
+Body: { node_id, region, runtime, asn_hint?, wallet_address?, green_energy? }
+Return: { status: "registered", node_id, node_token }
+Behavior:
+
+Upsert node in nodes as pending
+
+Issue/store per-node secret in node_secrets (return once)
+
+POST /v1/nodes/heartbeat (HMAC required)
+Headers:
+
+X-Node-Id: <node_id>
+
+X-Node-Ts: <unix_seconds>
+
+X-Node-Auth: <hex hmac_sha256(secret, body + ts)>
+Body: { gpu_util?, mem_used_gb?, p95_ms?, ready: boolean }
+Behavior:
+
+Verify HMAC; if bad → 401
+
+Update node last_heartbeat=now()
+
+If ready==true set status=active; else keep/set pending
+
+Return { status }
+
+POST /v1/receipts (HMAC required)
+Body:
+
+{
+  "id": "r_...",
+  "node_id": "macbook-001",
+  "region": "ap-southeast",
+  "model_id": "llama3.1-8b",
+  "payload": {
+    "version": "1.0",
+    "ts_start": 1736538502,
+    "ts_end": 1736538518,
+    "model_hash": "sha256:...",
+    "prompt_hash": "blake3:...",
+    "tokens_input": 128,
+    "tokens_output": 92,
+    "p95_ms": 310,
+    "s3_checkpoints": [100],
+    "hedged": false,
+    "cache_hit": true,
+    "signature": "ed25519:base64..."
+  }
+}
+
+
+Behavior: verify HMAC; persist row; return { ok: true }.
+
+GET /v1/summary
+Return: { active_nodes, total_nodes }
+
+GET /v1/nodes
+Return: list of nodes:
+
+[
+  {
+    "id": "macbook-001",
+    "region": "ap-southeast",
+    "runtime": "ollama",
+    "status": "active",
+    "reputation": 60,
+    "green_energy": false,
+    "last_heartbeat": "2025-09-30T10:00:00Z"
+  }
+]
+
+
+Authentication for dashboard users can be added later; v1 can be dev-open if running locally.
+
+HMAC Verification Rules
+
+Node computes hmac_sha256(secret, body + ts) in hex; sends in X-Node-Auth.
+
+Server checks |now - ts| ≤ 120s.
+
+Look up secret by node_id; recompute and compare (constant-time).
+
+Reject if missing headers or stale timestamp.
+
+Agent (dev) — Mac with Ollama
+
+Responsibilities:
+
+Call register → store node_token in memory (or env var).
+
+Every 10s: query Ollama tags; if any model loaded → ready=true.
+
+Post heartbeat with HMAC headers.
+
+(Optional) After first successful job, post a receipt.
+
+Assumptions:
+
+The agent runs on the same Mac as Ollama (http://127.0.0.1:11434).
+
+No inbound ports required on the Mac; only outbound HTTPS to the server.
+
+Dashboard UX (v1)
+
+Overview page: cards for Active Nodes and Total Nodes (from /v1/summary).
+
+Nodes page: table with Node ID, Region, Runtime, Status, Reputation, Green, Last Heartbeat (from /v1/nodes), auto-refresh every 5s.
+
+Color chips: active=green, pending=orange, offline=red, quarantine=amber.
+
+Acceptance Tests
+
+Start backend & dashboard locally (localhost:8001 backend, 3000 frontend).
+
+Run the dev agent on your Mac with NODE_ID="macbook-001", REGION="ap-southeast".
+
+Expected:
+
+/v1/nodes/register returns a node_token.
+
+/v1/nodes/heartbeat returns {status:"active"} once Ollama is ready.
+
+Dashboard Overview shows Active Nodes: 1; Nodes table lists macbook-001 as active with a recent heartbeat timestamp.
+
+Negative: change HMAC secret; heartbeat → 401 (auth enforced).
+
+Nice-to-haves (do if quick)
+
+Show relative time “last heartbeat 8s ago”.
+
+Add a simple “status dot” in the table.
+
+Tiny “copy node_token” after registration (dev only).
+
+.env values: DATABASE_URL, CORS_ORIGIN, NEXT_PUBLIC_API_BASE.
+
+Out of Scope (v1)
+
+Full RBAC, payouts, reputation math, validator probes, model uploads, private pools.
+
+Those come next—v1 is solely to prove a Mac (Ollama) can join, be verified, and appear active.
+
+Deliverable: A runnable repo where:
+
+uvicorn app.main:app --port 8001 (backend)
+
+npm run dev (frontend)
+
+python3 agent_mac_dev.py (on your Mac)
+…results in the dashboard showing your Mac node Active within ≤60s.

@@ -1,0 +1,525 @@
+Awesome — here’s an **end-to-end starter** so your **dashboard + backend can accept your Mac (Ollama) as a DGON node** and show it as **Connected / Active**. It includes:
+
+* Minimal **backend API** (FastAPI) to **register nodes, accept heartbeats, and ingest receipts**
+* Tiny **agent script for your Mac** that reads Ollama and posts heartbeats
+* Simple **dashboard page** (Next.js) that lists nodes + live status
+* **cURL tests** so you can verify everything in minutes
+
+---
+
+# 1) Repo layout
+
+```
+dgon-console/
+  backend/
+    app/main.py
+    app/models.py
+    app/db.py
+    app/security.py
+    requirements.txt
+    .env.example
+  frontend/
+    next.config.js
+    package.json
+    src/app/page.tsx
+    src/lib/api.ts
+```
+
+---
+
+# 2) Backend (FastAPI) — ready to receive your Mac node
+
+## 2.1 `backend/requirements.txt`
+
+```
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+SQLAlchemy==2.0.35
+python-dotenv==1.0.1
+passlib[bcrypt]==1.7.4
+```
+
+## 2.2 `backend/app/db.py` (SQLite by default; switch to Postgres later)
+
+```python
+import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dgon.db")
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+```
+
+## 2.3 `backend/app/models.py`
+
+```python
+from sqlalchemy import Column, String, Float, Integer, Boolean, DateTime, JSON
+from sqlalchemy.sql import func
+from .db import Base
+
+class Node(Base):
+    __tablename__ = "nodes"
+    id = Column(String, primary_key=True)            # "macbook-001"
+    region = Column(String)
+    runtime = Column(String)                         # "ollama" | "vllm" | ...
+    status = Column(String, default="pending")       # pending|active|offline|quarantine
+    reputation = Column(Float, default=60.0)
+    green_energy = Column(Boolean, default=False)
+    asn_hint = Column(String)
+    wallet_address = Column(String, nullable=True)
+    last_heartbeat = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class NodeSecret(Base):
+    __tablename__ = "node_secrets"
+    node_id = Column(String, primary_key=True)
+    secret = Column(String)  # HMAC shared secret per node
+
+class Receipt(Base):
+    __tablename__ = "receipts"
+    id = Column(String, primary_key=True)  # request_id
+    node_id = Column(String)
+    region = Column(String)
+    model_id = Column(String)
+    payload = Column(JSON)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+```
+
+## 2.4 `backend/app/security.py` (HMAC for node heartbeats/receipts)
+
+```python
+import hmac, hashlib, time, os
+from fastapi import HTTPException, Header
+
+NODE_AUTH_HEADER = "X-Node-Auth"     # base64(HMAC_SHA256(secret, body + ts))
+NODE_ID_HEADER   = "X-Node-Id"
+NODE_TS_HEADER   = "X-Node-Ts"       # unix seconds
+
+def verify_hmac(secret: str, body: bytes, ts: str, token: str):
+    # basic freshness check
+    now = int(time.time())
+    if abs(now - int(ts)) > 120:
+        raise HTTPException(status_code=401, detail="stale timestamp")
+    msg = body + ts.encode()
+    mac = hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(mac, token):
+        raise HTTPException(status_code=401, detail="invalid hmac")
+
+async def require_node_hmac(get_secret, body: bytes, node_id: str, ts: str, token: str):
+    if not node_id or not ts or not token:
+        raise HTTPException(status_code=401, detail="missing auth headers")
+    secret = get_secret(node_id)
+    if not secret:
+        raise HTTPException(status_code=401, detail="unknown node")
+    verify_hmac(secret, body, ts, token)
+```
+
+## 2.5 `backend/app/main.py`
+
+```python
+import os, json
+from fastapi import FastAPI, Depends, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+from .db import Base, engine, SessionLocal
+from .models import Node, NodeSecret, Receipt
+from .security import require_node_hmac, NODE_AUTH_HEADER, NODE_ID_HEADER, NODE_TS_HEADER
+
+app = FastAPI(title="DGON Console API")
+Base.metadata.create_all(bind=engine)
+
+# CORS (allow your frontend dev server)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.getenv("CORS_ORIGIN", "http://localhost:3000")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def db():
+    s = SessionLocal()
+    try:
+        yield s
+    finally:
+        s.close()
+
+def get_secret_by_node_id(db: Session, node_id: str):
+    row = db.query(NodeSecret).filter(NodeSecret.node_id == node_id).first()
+    return row.secret if row else None
+
+# ---------- Schemas ----------
+class RegisterBody(BaseModel):
+    node_id: str
+    region: str
+    runtime: str = Field(pattern="^(ollama|vllm|tensorrtllm|tgi)$")
+    asn_hint: str | None = None
+    wallet_address: str | None = None
+    green_energy: bool = False
+
+class RegisterResp(BaseModel):
+    status: str
+    node_id: str
+    node_token: str  # return secret once (store on node)
+
+class HeartbeatBody(BaseModel):
+    gpu_util: float | None = None
+    mem_used_gb: float | None = None
+    p95_ms: float | None = None
+    ready: bool = False
+
+class ReceiptBody(BaseModel):
+    id: str
+    node_id: str
+    region: str
+    model_id: str
+    payload: dict
+
+# ---------- Public: Summary ----------
+@app.get("/v1/summary")
+def summary(db: Session = Depends(db)):
+    total = db.query(Node).count()
+    active = db.query(Node).filter(Node.status == "active").count()
+    return {"active_nodes": active, "total_nodes": total}
+
+# ---------- Node Registration (admin bootstrap for now) ----------
+@app.post("/v1/nodes/register", response_model=RegisterResp)
+def register(body: RegisterBody, db: Session = Depends(db)):
+    # Create or upsert node
+    node = db.query(Node).filter(Node.id == body.node_id).first()
+    if not node:
+        node = Node(id=body.node_id)
+    node.region = body.region
+    node.runtime = body.runtime
+    node.status = "pending"
+    node.asn_hint = body.asn_hint
+    node.wallet_address = body.wallet_address
+    node.green_energy = body.green_energy
+    db.add(node)
+    # Issue secret (simple dev version; rotate later)
+    import secrets
+    secret_val = secrets.token_hex(32)
+    ns = db.query(NodeSecret).filter(NodeSecret.node_id == body.node_id).first()
+    if not ns:
+        ns = NodeSecret(node_id=body.node_id, secret=secret_val)
+    else:
+        ns.secret = secret_val
+    db.add(ns)
+    db.commit()
+    return {"status": "registered", "node_id": body.node_id, "node_token": secret_val}
+
+# ---------- Heartbeat (requires HMAC) ----------
+@app.post("/v1/nodes/heartbeat")
+async def heartbeat(
+    request: Request,
+    db: Session = Depends(db),
+):
+    body_bytes = await request.body()
+    node_id = request.headers.get(NODE_ID_HEADER)
+    ts = request.headers.get(NODE_TS_HEADER)
+    token = request.headers.get(NODE_AUTH_HEADER)
+
+    def _get_secret(nid: str):
+        return get_secret_by_node_id(db, nid)
+
+    await require_node_hmac(_get_secret, body_bytes, node_id, ts, token)
+
+    data = HeartbeatBody.model_validate_json(body_bytes)
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if not node:
+        raise HTTPException(status_code=404, detail="node not found")
+    node.status = "active" if data.ready else "pending"
+    db.add(node)
+    db.commit()
+    return {"status": node.status}
+
+# ---------- Receipt ingest (requires HMAC) ----------
+@app.post("/v1/receipts")
+async def receipts(
+    request: Request,
+    db: Session = Depends(db),
+):
+    body_bytes = await request.body()
+    node_id = request.headers.get(NODE_ID_HEADER)
+    ts = request.headers.get(NODE_TS_HEADER)
+    token = request.headers.get(NODE_AUTH_HEADER)
+
+    def _get_secret(nid: str):
+        return get_secret_by_node_id(db, nid)
+
+    await require_node_hmac(_get_secret, body_bytes, node_id, ts, token)
+
+    rb = ReceiptBody.model_validate_json(body_bytes)
+    rec = Receipt(id=rb.id, node_id=rb.node_id, region=rb.region, model_id=rb.model_id, payload=rb.payload)
+    db.add(rec)
+    db.commit()
+    return {"ok": True}
+
+# ---------- Nodes list (dashboard) ----------
+@app.get("/v1/nodes")
+def list_nodes(db: Session = Depends(db)):
+    rows = db.query(Node).all()
+    return [
+        {
+            "id": r.id, "region": r.region, "runtime": r.runtime,
+            "status": r.status, "reputation": r.reputation,
+            "green_energy": r.green_energy, "last_heartbeat": r.last_heartbeat.isoformat() if r.last_heartbeat else None
+        }
+        for r in rows
+    ]
+```
+
+## 2.6 `.env.example`
+
+```
+DATABASE_URL=sqlite:///./dgon.db
+CORS_ORIGIN=http://localhost:3000
+```
+
+**Run backend**
+
+```bash
+cd dgon-console/backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+```
+
+---
+
+# 3) Tiny Mac “agent” to connect your Ollama to the server
+
+> This **dev agent** registers your Mac node, checks Ollama readiness, and sends signed heartbeats. Replace with the real agent later.
+
+Create `agent_mac_dev.py` on your Mac:
+
+```python
+import os, time, hmac, hashlib, json, requests, subprocess
+API = os.getenv("DGON_API", "http://localhost:8001")
+NODE_ID = os.getenv("NODE_ID", "macbook-001")
+REGION = os.getenv("REGION", "ap-southeast")
+RUNTIME = "ollama"
+
+def hmac_headers(secret, node_id, body):
+    ts = str(int(time.time()))
+    token = hmac.new(secret.encode(), body + ts.encode(), hashlib.sha256).hexdigest()
+    return {"X-Node-Id": node_id, "X-Node-Ts": ts, "X-Node-Auth": token, "Content-Type": "application/json"}
+
+# 1) Register node (one-time, returns node_token)
+reg = {
+    "node_id": NODE_ID, "region": REGION, "runtime": RUNTIME,
+    "asn_hint":"residential","wallet_address":"", "green_energy": False
+}
+r = requests.post(f"{API}/v1/nodes/register", json=reg, timeout=10)
+r.raise_for_status()
+node_token = r.json()["node_token"]
+print("Registered. token:", node_token[:8], "...")
+
+# 2) Loop heartbeats
+while True:
+    # probe ollama ready
+    ready = False
+    try:
+        tags = requests.get("http://127.0.0.1:11434/api/tags", timeout=2).json()
+        ready = len(tags.get("models", [])) > 0
+    except Exception:
+        ready = False
+
+    body = json.dumps({"gpu_util": 0.4, "mem_used_gb": 6.0, "p95_ms": 320, "ready": ready}).encode()
+    h = hmac_headers(node_token, NODE_ID, body)
+    rr = requests.post(f"{API}/v1/nodes/heartbeat", data=body, headers=h, timeout=10)
+    print("heartbeat:", rr.status_code, rr.text)
+    time.sleep(10)
+```
+
+Run it:
+
+```bash
+export DGON_API="http://<server-ip>:8001"   # or http://localhost:8001 if local
+export NODE_ID="macbook-001"
+export REGION="ap-southeast"
+python3 agent_mac_dev.py
+```
+
+> **Result:** your backend receives **/register** then **/heartbeat**; the node status flips to **active** when Ollama is ready.
+
+---
+
+# 4) Frontend (Next.js) — show node as Connected
+
+## 4.1 `frontend/package.json`
+
+```json
+{
+  "name": "dgon-console",
+  "private": true,
+  "scripts": { "dev": "next dev -p 3000", "build": "next build", "start": "next start" },
+  "dependencies": {
+    "next": "14.2.7",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  }
+}
+```
+
+## 4.2 `frontend/next.config.js`
+
+```js
+module.exports = {
+  reactStrictMode: true,
+  experimental: { appDir: true }
+}
+```
+
+## 4.3 `frontend/src/lib/api.ts`
+
+```ts
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8001';
+
+export async function fetchJSON<T>(path: string): Promise<T> {
+  const r = await fetch(`${API_BASE}${path}`, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+```
+
+## 4.4 `frontend/src/app/page.tsx`
+
+```tsx
+'use client';
+import React, { useEffect, useState } from 'react';
+import { API_BASE, fetchJSON } from '../lib/api';
+
+type NodeRow = {
+  id: string; region: string; runtime: string; status: string;
+  reputation: number; green_energy: boolean; last_heartbeat: string | null;
+};
+
+export default function Home() {
+  const [summary, setSummary] = useState<any>(null);
+  const [nodes, setNodes] = useState<NodeRow[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    try {
+      setSummary(await fetchJSON('/v1/summary'));
+      setNodes(await fetchJSON('/v1/nodes'));
+    } catch (e: any) { setErr(e.message); }
+  }
+
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, []);
+
+  return (
+    <main style={{ padding: 24, fontFamily: 'Inter, system-ui, sans-serif' }}>
+      <h1>DGON — Network Overview</h1>
+      {err && <div style={{ color: 'red' }}>Error: {err}</div>}
+
+      <section style={{ display: 'flex', gap: 16, marginTop: 16 }}>
+        <Card title="Active Nodes" value={summary?.active_nodes ?? '—'} />
+        <Card title="Total Nodes" value={summary?.total_nodes ?? '—'} />
+      </section>
+
+      <h2 style={{ marginTop: 24 }}>Nodes</h2>
+      <table cellPadding={8} style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ background: '#eee' }}>
+            <th align="left">Node</th><th>Region</th><th>Runtime</th><th>Status</th>
+            <th>Reputation</th><th>Green</th><th>Last Heartbeat</th>
+          </tr>
+        </thead>
+        <tbody>
+          {nodes.map(n => (
+            <tr key={n.id} style={{ borderBottom: '1px solid #ddd' }}>
+              <td>{n.id}</td>
+              <td align="center">{n.region}</td>
+              <td align="center">{n.runtime}</td>
+              <td align="center" style={{ color: n.status === 'active' ? 'green' : n.status === 'pending' ? 'orange' : 'red' }}>{n.status}</td>
+              <td align="center">{Math.round(n.reputation)}</td>
+              <td align="center">{n.green_energy ? '✓' : ''}</td>
+              <td align="center">{n.last_heartbeat ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <p style={{ marginTop: 16, color: '#666' }}>
+        Point your Mac agent to the API and watch it turn <b>active</b> when Ollama is ready.
+      </p>
+    </main>
+  );
+}
+
+function Card({title, value}:{title:string, value:any}) {
+  return (
+    <div style={{ padding: 16, border: '1px solid #ddd', borderRadius: 8, minWidth: 160 }}>
+      <div style={{ fontSize: 12, color: '#666' }}>{title}</div>
+      <div style={{ fontSize: 24, fontWeight: 700 }}>{value}</div>
+    </div>
+  );
+}
+```
+
+**Run frontend**
+
+```bash
+cd dgon-console/frontend
+npm i
+export NEXT_PUBLIC_API_BASE="http://localhost:8001"
+npm run dev
+# open http://localhost:3000
+```
+
+---
+
+# 5) Quick cURL tests (prove server accepts your node)
+
+**Register (server side)**
+
+```bash
+curl -s http://localhost:8001/v1/nodes/register \
+  -H 'Content-Type: application/json' \
+  -d '{"node_id":"macbook-001","region":"ap-southeast","runtime":"ollama"}'
+# copy "node_token" from response
+```
+
+**Heartbeat (with HMAC)**
+
+```bash
+NODE_TOKEN=<paste>
+NODE_ID=macbook-001
+TS=$(date +%s)
+BODY='{"gpu_util":0.4,"mem_used_gb":6,"p95_ms":320,"ready":true}'
+SIG=$(python3 - <<EOF
+import hmac,hashlib,os,sys
+print(hmac.new(os.environ["NODE_TOKEN"].encode(), (os.environ["BODY"]+os.environ["TS"]).encode(), hashlib.sha256).hexdigest())
+EOF
+)
+curl -s http://localhost:8001/v1/nodes/heartbeat \
+  -H "Content-Type: application/json" \
+  -H "X-Node-Id: $NODE_ID" -H "X-Node-Ts: $TS" -H "X-Node-Auth: $SIG" \
+  --data "$BODY"
+```
+
+Open **[http://localhost:3000](http://localhost:3000)** → you should see **macbook-001** with status **active**.
+
+---
+
+## What you now have
+
+* A **dashboard** that lists nodes and shows **Active** when your Mac (Ollama) is ready.
+* A **backend** that **registers nodes, verifies HMAC heartbeats, ingests receipts**.
+* A **dev agent** you can run on your MacBook to connect Ollama to the network.
+
+When you’re ready, I can:
+
+* Add the **Receipts Explorer** and a **simple signature verifier** endpoint.
+* Switch DB to **Postgres + ClickHouse** with migrations.
+* Skin the frontend in your brand (dark theme, Tailwind/shadcn).

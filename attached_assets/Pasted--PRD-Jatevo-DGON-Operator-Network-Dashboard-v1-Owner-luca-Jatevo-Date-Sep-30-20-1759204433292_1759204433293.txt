@@ -1,0 +1,360 @@
+# PRD — Jatevo DGON Operator & Network Dashboard (v1)
+
+**Owner:** luca (Jatevo)
+**Date:** Sep 30, 2025
+**Goal:** Ship a production-ready **web console** to (a) onboard node operators (incl. your MacBook), (b) visualize network health, and (c) expose receipts/metrics for billing and audits.
+
+---
+
+## 1) Objectives & Success Criteria
+
+### 1.1 Primary Objectives
+
+* **O1. Onboard nodes end-to-end:** Agent registration → Pending → Active with first **validated receipt** visible in the dashboard.
+* **O2. Observe the network:** Real-time counts (Active nodes, p95 latency by region, requests last 24h), searchable node list, receipts explorer.
+* **O3. Payout readiness:** Show per-node earnings (fees + JTVO est.), wallet status, and payout eligibility (no on-chain ops in v1).
+* **O4. Role-safe access:** RBAC (Admin, Operator, Viewer) with audit logs.
+
+### 1.2 Success Metrics (Acceptance)
+
+* **A1:** A new Mac node appears in **< 60s** after agent start and flips to **Active** after passing probes.
+* **A2:** First streamed request generates a **verifiable receipt** displayed in UI within **< 5s** of completion.
+* **A3:** p95 latency card updates every **≤ 15s**; uptime SLO ≥ 99.9% for dashboard API.
+* **A4:** All P0 pages pass Lighthouse **Perf ≥ 80**, **A11y ≥ 90**.
+
+---
+
+## 2) Target Users & Roles
+
+* **Admin (Jatevo):** Full control; can view all nodes/receipts, manage feature flags and payouts, view audit logs.
+* **Operator:** Sees only their nodes, receipts, earnings, wallet, payouts, and onboarding.
+* **Viewer (Read-only):** Public/partner read: status, regions, models, aggregated metrics; no PII, no payouts.
+
+---
+
+## 3) Scope (v1 Features)
+
+### 3.1 Pages (P0)
+
+1. **Overview (Network Status)**
+
+   * KPI cards: Active Nodes, Avg p95 (global + by region), Models Cached, Requests (24h).
+   * Region heatmap; small trends (last 24h).
+   * Live incidents banner (from status table).
+
+2. **Nodes (Table + Detail)**
+
+   * Filters: role=operator/self, region, runtime (ollama/vllm/tensorrtllm/tgi), status (pending/active/quarantine/offline), reputation range.
+   * Columns: Node ID, Region, Runtime, Reputation, p95, Uptime 7d, Earnings to date, Status.
+   * Detail drawer: metrics (p50/p95/p99), heartbeats, last 10 receipts, hardware/attestation, energy tag (green), correlation hints (ASN).
+
+3. **Receipts (Explorer)**
+
+   * Search by request_id, node_id, date range, model_id, region, hedged=true/false.
+   * Receipt JSON viewer (pretty-print), signature verify badge, download.
+   * Aggregates (tokens, cache hits, failures) over range.
+
+4. **Earnings (Wallet)**
+
+   * Fees (USD est.), JTVO rewards (est.), payout threshold, wallet address, history.
+   * “Mark ready” (admin only), CSV export.
+
+5. **Run a Node (Onboarding)**
+
+   * Platform pick (Mac, Linux, NVIDIA).
+   * Personalized `agent.yaml` + service template (launchd/systemd).
+   * Health checklist with live signals: registered/heartbeat/ready.
+
+6. **Docs** (inline md): API, adapter, QoS hints, error codes, receipts schema.
+
+### 3.2 P1 (post-GA)
+
+* Private Pools (labels, org scopes), Audit log UI, Feature flag UI, Status history page.
+
+---
+
+## 4) Non-Functional Requirements
+
+* **Security:** JWT auth (short TTL) + refresh; all APIs behind TLS; rate-limits; no prompts/outputs logged by default.
+* **Privacy:** Operator can opt-in to share anonymized metrics for public pages.
+* **Availability:** Dashboard API SLO 99.9%; caching with 15s staleness allowance for metrics.
+* **Performance:** P50 page TTFB < 200ms, P95 < 600ms (from APAC/US).
+* **Compliance:** SOC 2–aligned controls (logging, RBAC, change mgmt).
+* **Observability:** OTEL traces for every dashboard API call; Prometheus metrics; structured logs.
+
+---
+
+## 5) System Architecture (v1)
+
+**Frontend:** Next.js 14 (App Router) + TypeScript, Tailwind, shadcn/ui, Recharts, React Query.
+**Backend:** FastAPI (Python) or Node/Express (pick one), Postgres (OLTP), ClickHouse (metrics), Redis (cache, rate limit).
+**Agents/Validators:** Already exist or stubbed for test; dashboard will consume their events via **ingress API** and **Kafka/NATS** (optional) or direct HTTP webhooks.
+
+### 5.1 High-Level Flow
+
+1. **Agent register** → `POST /v1/nodes/register` → `nodes` table row → emit **heartbeat** every 10s.
+2. **Validators probe** → update **reputation**, **latency** → write to `node_metrics_*`.
+3. **Request completes** → **receipt** written via `POST /v1/receipts` (signed) → stored (Postgres JSONB + CH append).
+4. **Dashboard** pulls metrics (cached 5–15s), shows receipts on demand (live).
+
+---
+
+## 6) Data Model (DB)
+
+### Postgres (OLTP)
+
+```sql
+-- Users & orgs
+CREATE TABLE orgs (
+  id uuid PRIMARY KEY, name text, created_at timestamptz DEFAULT now()
+);
+CREATE TABLE users (
+  id uuid PRIMARY KEY, org_id uuid REFERENCES orgs(id),
+  email text UNIQUE, role text CHECK (role IN ('admin','operator','viewer')),
+  created_at timestamptz DEFAULT now()
+);
+
+-- Nodes
+CREATE TABLE nodes (
+  id text PRIMARY KEY,                 -- e.g., "macbook-001"
+  org_id uuid REFERENCES orgs(id),
+  region text, runtime text, status text CHECK (status IN ('pending','active','quarantine','offline')),
+  reputation numeric CHECK (reputation BETWEEN 0 AND 100),
+  asn_hint text, green_energy boolean DEFAULT false,
+  wallet_address text, last_heartbeat timestamptz, created_at timestamptz DEFAULT now()
+);
+
+-- Node capabilities/attestation
+CREATE TABLE node_attestations (
+  node_id text REFERENCES nodes(id),
+  gpu_model text, vram_gb int, driver_version text, cuda_version text,
+  hardware_hash text, energy_proof_url text, updated_at timestamptz DEFAULT now()
+);
+
+-- Receipts (OLTP index + JSONB payload)
+CREATE TABLE receipts (
+  id text PRIMARY KEY,                 -- request_id
+  node_id text REFERENCES nodes(id),
+  region text, model_id text, created_at timestamptz DEFAULT now(),
+  payload jsonb                        -- full signed receipt JSON (see schema below)
+);
+
+-- Earnings
+CREATE TABLE earnings (
+  id bigserial PRIMARY KEY,
+  node_id text REFERENCES nodes(id),
+  period_start date, period_end date,
+  fees_usd numeric, jtvo_est numeric, payout_ready boolean DEFAULT false
+);
+
+-- Incidents / status
+CREATE TABLE incidents (
+  id bigserial PRIMARY KEY,
+  severity text CHECK (severity IN ('info','warn','major')),
+  title text, description text, region text, created_at timestamptz DEFAULT now(), resolved_at timestamptz
+);
+```
+
+### ClickHouse (metrics, append-only)
+
+* `node_latency_minute (ts, node_id, region, p50, p95, p99, tps)`
+* `node_uptime_minute (ts, node_id, up)`
+* `requests_minute (ts, region, count, tokens_in, tokens_out, cache_hits)`
+
+---
+
+## 7) APIs (Backend) — Minimal OpenAPI Sketch
+
+```
+GET  /v1/summary                      -> { active_nodes, p95_global, p95_by_region[], models_cached, requests_24h }
+GET  /v1/nodes                        -> query by status, region, runtime, reputation_range
+GET  /v1/nodes/{node_id}              -> node detail + latest metrics + last receipts
+POST /v1/nodes/register               -> {node_id, region, runtime, attest, wallet} -> 201 + auth (HMAC/JWT)
+POST /v1/nodes/heartbeat              -> {node_id, metrics{uptime, temp?, gpu_util}, ts}
+POST /v1/receipts                     -> {receipt_json_signed} -> 201 (verify signature, persist)
+GET  /v1/receipts                     -> query by node_id, date range, model_id, region, hedged
+GET  /v1/earnings/{node_id}           -> fees_usd, jtvo_est, next_payout
+GET  /v1/incidents                    -> list open/resolved
+POST /v1/auth/login                   -> email+pass / oauth -> JWT
+GET  /v1/users/me                     -> whoami (role, org)
+```
+
+**Auth:**
+
+* Dashboard users: JWT (short TTL) + refresh.
+* Agents: `nodes.register` returns a **node token** (HMAC) to sign heartbeats/receipts; or use mTLS.
+
+**Receipt JSON (example)** — same as before:
+
+```json
+{
+  "version":"1.0","request_id":"r_01J8KQ...","node_id":"macbook-001",
+  "region":"ap-southeast","ts_start":1736538502,"ts_end":1736538518,
+  "model_id":"llama3.1-8b","model_hash":"sha256:...","prompt_hash":"blake3:...",
+  "tokens_input":128,"tokens_output":92,"p95_ms":310,"s3_checkpoints":[100],
+  "hedged":false,"cache_hit":true,"signature":"ed25519:base64..."
+}
+```
+
+**Errors (shape):**
+
+```json
+{"error":{"type":"invalid_signature","message":"receipt signature verification failed"}}
+```
+
+---
+
+## 8) Frontend UX Spec (P0)
+
+### 8.1 Overview
+
+* **Cards (4):** Active Nodes, Avg p95 (global), Models Cached, Requests (24h).
+* **Region chart:** segmented bar with p95 per region; click → filters Nodes view.
+* **Incidents banner:** small pill with severity color.
+
+### 8.2 Nodes
+
+* **Table:** sticky header, 25 rows/page, server-side filters.
+* **Status chips:** Pending (gray), Active (green), Quarantine (amber), Offline (red).
+* **Detail drawer tabs:** *Metrics*, *Receipts*, *Hardware*, *Earnings*.
+* **Actions:** (Admin) Quarantine, Mark payout-ready; (Operator) Download agent config.
+
+### 8.3 Receipts
+
+* **Search bar + filters**; results in virtualized list.
+* **Receipt viewer:** JSON pretty-print with copy/download; “Verify signature” badge.
+* **Aggregation strip:** tokens_in/out, cache_hits %, avg p95 for filter window.
+
+### 8.4 Earnings
+
+* **Wallet card:** address, chain, threshold.
+* **Chart:** earnings over time, JTVO est., fees USD.
+* **CSV export**.
+
+### 8.5 Run a Node
+
+* **Step cards:** Pick OS → Generate `agent.yaml` → Install service → Verify.
+* **Live readouts:** registration, heartbeat timestamps, ready status.
+
+**Design tokens (dark mode default):**
+
+* BG `#0B0E13`, Panel `#121622`, Stroke `#1E2433`, Text `#F2F4F8`, Muted `#9EA7B3`
+* Primary `#6B7CFF` (indigo), Accent `#22CE9A` (mint)
+* Focus ring 2px indigo + 2px offset; 12px radius; cards subtle shadow.
+
+---
+
+## 9) State Machine (Node Lifecycle)
+
+```
+REGISTERED -> PENDING_PROBE -> ACTIVE
+    |             |              |
+    |             |--fail--> QUARANTINE
+    |                                |
+    |<-----manual clear/audit--------|
+ACTIVE --missed heartbeats/low R--> QUARANTINE
+QUARANTINE --pass audits--> ACTIVE
+ACTIVE --no heartbeat 5m--> OFFLINE
+OFFLINE --heartbeat--> PENDING_PROBE
+```
+
+**Quarantine reasons:** Reputation < threshold, audit fail, receipt fraud suspicion, SLO breach.
+
+---
+
+## 10) Reputation & Metrics (Dashboard-calculated)
+
+* Store last 14d rolling sub-scores: Reliability, Correctness, Efficiency, Policy.
+* Display **R 0–100** and explainers (hover) with last probe time.
+* Show p50/p95/p99 charts per node (last 24h).
+* Show **energy tag** (green) if attested.
+
+---
+
+## 11) Telemetry & Tracking Plan
+
+**Backend metrics:**
+
+* `api_http_request_duration_seconds{route,code}`
+* `db_query_duration_seconds{op}`
+* `summary_active_nodes`, `summary_requests_24h`, `summary_models_cached`
+
+**Frontend events (privacy-safe):**
+
+* `view_overview`, `filter_nodes`, `open_node_detail`, `view_receipt`, `export_csv`, `generate_agent_yaml`
+
+**Logs:**
+
+* Correlate with `x-request-id`; redact secrets.
+
+---
+
+## 12) Security & Compliance
+
+* JWT in HttpOnly cookies, CSRF tokens on mutations.
+* RBAC checks server-side; never trust client role.
+* Rate limit: `nodes.*` 10 rps per node; `receipts POST` 5 rps per node.
+* IP allowlisting for validator → node health endpoints (optional mTLS).
+* Data retention: receipts ≥ 180 days; metrics raw 30 days, downsampled 365 days.
+
+---
+
+## 13) Feature Flags (P0)
+
+* `enable_private_pools` (off)
+* `show_jtvo_estimates` (on)
+* `allow_anonymous_overview` (on)
+* `enable_signature_verify` (on)
+
+---
+
+## 14) Milestones & Delivery Plan
+
+**M1 (Week 1–2):**
+
+* DB schema, auth, `/v1/summary`, `/v1/nodes` (list/detail), heartbeat ingestion, minimal UI (Overview, Nodes).
+
+**M2 (Week 3–4):**
+
+* Receipts ingestion `/v1/receipts`, Explorer UI, JSON viewer, signature verify.
+
+**M3 (Week 5–6):**
+
+* Earnings model, Wallet page, CSV export, Run-a-Node page with generated config.
+
+**M4 (Week 7):**
+
+* Polishing: charts, status page, incidents, audits of a11y/perf, docs.
+
+**Go/No-Go:**
+
+* Your **MacBook node** registers, appears **Active**, first test request shows a **receipt** in Explorer.
+
+---
+
+## 15) Test Plan (Acceptance)
+
+* **Happy path:** Register agent → Pending → Active, render in Nodes; send request → receipt visible → “Verify signature: valid”.
+* **Degraded:** Agent stops heartbeats → node → **Offline** within 5m; dashboard updates.
+* **Quarantine:** Post a fake receipt (bad signature) in staging → node auto-quarantined (admin view).
+* **Perf:** Overview endpoints serve in < 200ms p50; charts render within < 1s.
+
+---
+
+## 16) Deliverables
+
+* **Backend:** OpenAPI JSON, Postgres migrations, CH schema, Dockerfile, OTEL/Prom exporters.
+* **Frontend:** Next.js app with the six P0 pages, Tailwind theme, role-based navbar, environment configs.
+* **Ops:** Helm chart or docker-compose for the stack, `.env.example`, seed scripts.
+* **Docs:** Markdown for onboarding, API usage, and runbooks.
+
+---
+
+### Engineer Notes (to get your Mac online on Day 1 of QA)
+
+* Implement `POST /v1/nodes/register`, `POST /v1/nodes/heartbeat` first.
+* Add a simple **seed page** under **Run a Node** that renders `agent.yaml` with your **Mac node_id** and **region**.
+* Start the agent in foreground; verify it appears in **Nodes** with heartbeats; mark it **Active** after a dummy validator probe.
+* Fire **one** synthetic request; POST a valid **receipt**; confirm it displays in **Receipts**.
+
+If you want, I can generate **starter repos** (Next.js + FastAPI) with the routes, DB migrations, and a dummy agent that simulates your Mac until the real agent is ready.

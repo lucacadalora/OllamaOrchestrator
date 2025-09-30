@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { requireNodeAuth, generateNodeSecret } from "./security";
 import { insertNodeSchema, heartbeatSchema, insertReceiptSchema, RuntimeEnum, StatusEnum, loginSchema } from "@shared/schema";
@@ -766,11 +767,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const request = await storage.getRequestById(id);
         if (request) {
           const currentResponse = request.response || "";
+          const newResponse = currentResponse + chunk;
           await storage.updateRequestStatus(
             id, 
             done ? "completed" : "streaming",
-            currentResponse + chunk
+            newResponse
           );
+          
+          // Send via WebSocket if connection exists for instant streaming
+          const wsConnections = (app as any).wsConnections as Map<string, WebSocket>;
+          const ws = wsConnections.get(id);
+          
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: "stream_chunk",
+              requestId: id,
+              chunk,
+              response: newResponse,
+              done
+            }));
+          }
         }
         
         res.json({ success: true });
@@ -819,5 +835,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   const httpServer = createServer(app);
+  
+  // Create WebSocket server for real-time streaming
+  const wss = new WebSocketServer({ server: httpServer });
+  
+  // Store active WebSocket connections
+  const activeConnections = new Map<string, WebSocket>();
+  
+  // WebSocket connection handler
+  wss.on("connection", (ws, req) => {
+    const url = new URL(req.url || "", `http://${req.headers.host}`);
+    const sessionId = url.searchParams.get("session");
+    
+    if (!sessionId) {
+      ws.close(1008, "Session ID required");
+      return;
+    }
+    
+    console.log(`WebSocket connected: ${sessionId}`);
+    activeConnections.set(sessionId, ws);
+    
+    ws.on("message", async (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        
+        if (message.type === "inference_request") {
+          // Create inference request
+          const request = await storage.createInferenceRequest(
+            message.model,
+            message.messages
+          );
+          
+          // Send request ID back to client
+          ws.send(JSON.stringify({
+            type: "request_created",
+            requestId: request.id
+          }));
+          
+          // Store WebSocket connection for this request
+          activeConnections.set(request.id, ws);
+        }
+      } catch (error) {
+        console.error("WebSocket message error:", error);
+        ws.send(JSON.stringify({ type: "error", error: String(error) }));
+      }
+    });
+    
+    ws.on("close", () => {
+      console.log(`WebSocket disconnected: ${sessionId}`);
+      activeConnections.delete(sessionId);
+      // Clean up any request-specific connections
+      for (const [key, conn] of activeConnections.entries()) {
+        if (conn === ws) {
+          activeConnections.delete(key);
+        }
+      }
+    });
+    
+    ws.on("error", (error) => {
+      console.error("WebSocket error:", error);
+    });
+  });
+  
+  // Export WebSocket connections for use in other endpoints
+  (app as any).wsConnections = activeConnections;
+  
   return httpServer;
 }

@@ -873,8 +873,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create WebSocket server for real-time streaming (noServer mode)
   const wss = new WebSocketServer({ noServer: true });
   
-  // Store active WebSocket connections
-  const activeConnections = new Map<string, WebSocket>();
+  // Store frontend WebSocket connections by session ID only
+  const sessionConnections = new Map<string, WebSocket>();
+  
+  // Store request ID to WebSocket mapping for precise chunk delivery
+  const requestConnections = new Map<string, WebSocket>();
   
   // Handle WebSocket upgrade manually
   httpServer.on('upgrade', (request, socket, head) => {
@@ -889,7 +892,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
   
-  // Store agent WebSocket connections by request ID
+  // Store agent WebSocket connections by node ID
   const agentConnections = new Map<string, WebSocket>();
   
   // WebSocket connection handler
@@ -908,8 +911,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const message = JSON.parse(data.toString());
           
           if (message.type === "stream_chunk") {
-            // Forward chunk to frontend WebSocket if connected
-            const frontendWs = activeConnections.get(message.requestId);
+            // Forward chunk to the specific frontend WebSocket for this request
+            const frontendWs = requestConnections.get(message.requestId);
             if (frontendWs && frontendWs.readyState === WebSocket.OPEN) {
               frontendWs.send(JSON.stringify({
                 type: "chunk",
@@ -938,7 +941,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     console.log(`Frontend WebSocket connected: ${sessionId}`);
-    activeConnections.set(sessionId, ws);
+    sessionConnections.set(sessionId, ws);
     
     ws.on("message", async (data) => {
       try {
@@ -957,8 +960,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             requestId: request.id
           }));
           
-          // Store WebSocket connection for this request
-          activeConnections.set(request.id, ws);
+          // Map this specific request to THIS WebSocket connection only
+          requestConnections.set(request.id, ws);
         }
       } catch (error) {
         console.error("WebSocket message error:", error);
@@ -968,11 +971,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     ws.on("close", () => {
       console.log(`WebSocket disconnected: ${sessionId}`);
-      activeConnections.delete(sessionId);
-      // Clean up any request-specific connections
-      for (const [key, conn] of activeConnections.entries()) {
+      sessionConnections.delete(sessionId);
+      
+      // Clean up all request mappings for this connection
+      for (const [requestId, conn] of requestConnections.entries()) {
         if (conn === ws) {
-          activeConnections.delete(key);
+          requestConnections.delete(requestId);
         }
       }
     });
@@ -982,8 +986,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
   
-  // Export WebSocket connections for use in other endpoints
-  (app as any).wsConnections = activeConnections;
+  // Export request connections for use in HTTP streaming endpoint
+  (app as any).wsConnections = requestConnections;
   
   return httpServer;
 }

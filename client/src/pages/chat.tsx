@@ -60,11 +60,11 @@ export default function Chat() {
       return response.json();
     },
     onSuccess: (data) => {
-      // Add assistant response (temporary until WebSocket is implemented)
+      // Add assistant response
       const assistantMessage: Message = {
         id: `msg-${Date.now()}-assistant`,
         role: "assistant",
-        content: `Request routed to node: ${data.nodeId}. Real-time inference coming soon!`,
+        content: data.response || `Error: No response from node ${data.nodeId}`,
         timestamp: new Date(),
         nodeId: data.nodeId,
       };

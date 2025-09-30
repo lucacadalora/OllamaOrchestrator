@@ -10,11 +10,8 @@ import hmac
 import hashlib
 import json
 import sys
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
 
 # Configuration from environment variables
 API_BASE = os.getenv("DGON_API", "http://localhost:5000/api")
@@ -134,23 +131,31 @@ def send_heartbeat(token, ready, model_count=0, model_names=None):
         log(f"✗ Connection error: {e.reason}", RED)
         return False
 
-class InferenceHandler(BaseHTTPRequestHandler):
-    """HTTP handler for inference requests from the DGON console"""
+def poll_for_inference_requests(token):
+    """Poll for inference requests from the queue"""
+    timestamp = str(int(time.time()))
+    signature = calculate_hmac(token, b"", timestamp)
     
-    def log_message(self, format, *args):
-        """Override to suppress default HTTP server logs"""
-        pass
+    req = Request(
+        f"{API_BASE}/v1/inference/poll",
+        headers={
+            'X-Node-Id': NODE_ID,
+            'X-Node-Ts': timestamp,
+            'X-Node-Auth': signature
+        },
+        method='GET'
+    )
     
-    def do_POST(self):
-        """Handle inference requests"""
-        if self.path == '/inference':
-            try:
-                content_length = int(self.headers['Content-Length'])
-                post_data = self.rfile.read(content_length)
-                request = json.loads(post_data.decode('utf-8'))
+    try:
+        with urlopen(req, timeout=10) as response:
+            result = json.loads(response.read().decode())
+            if result and result.get('id'):
+                # We have a request to process
+                request_id = result.get('id')
+                model = result.get('model', 'llama3.2')
+                messages = result.get('messages', [])
                 
-                model = request.get('model', 'llama3.2')
-                messages = request.get('messages', [])
+                log(f"📥 Processing inference request {request_id[:8]}...", BLUE)
                 
                 # Convert messages to Ollama format
                 prompt = ""
@@ -180,54 +185,56 @@ class InferenceHandler(BaseHTTPRequestHandler):
                     method='POST'
                 )
                 
-                with urlopen(ollama_req, timeout=30) as ollama_response:
-                    result = json.loads(ollama_response.read().decode())
+                try:
+                    with urlopen(ollama_req, timeout=60) as ollama_response:
+                        ollama_result = json.loads(ollama_response.read().decode())
+                        ai_response = ollama_result.get("response", "")
+                        
+                        # Send response back to console
+                        submit_inference_response(token, request_id, ai_response)
+                        log(f"✓ Inference completed for model {model}", GREEN)
+                        
+                except Exception as e:
+                    # Send error back to console
+                    submit_inference_response(token, request_id, None, str(e))
+                    log(f"✗ Ollama error: {e}", RED)
                     
-                    # Send response back
-                    response = {
-                        "response": result.get("response", ""),
-                        "done": True,
-                        "model": model
-                    }
-                    
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps(response).encode('utf-8'))
-                    
-                    # Log the inference
-                    log(f"✓ Inference completed for model {model}", GREEN)
-                    
-            except Exception as e:
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                error_response = {"error": str(e)}
-                self.wfile.write(json.dumps(error_response).encode('utf-8'))
-                log(f"✗ Inference error: {e}", RED)
-        else:
-            self.send_response(404)
-            self.end_headers()
-    
-    def do_GET(self):
-        """Health check endpoint"""
-        if self.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-def start_inference_server(port=7860):
-    """Start the HTTP server for inference requests"""
-    try:
-        server = HTTPServer(('0.0.0.0', port), InferenceHandler)
-        log(f"✓ Inference server started on port {port}", GREEN)
-        server.serve_forever()
+    except HTTPError as e:
+        if e.code != 404:  # 404 means no pending requests
+            log(f"✗ Poll error: {e.read().decode()}", RED)
     except Exception as e:
-        log(f"✗ Failed to start inference server: {e}", RED)
+        log(f"✗ Poll error: {e}", RED)
+
+def submit_inference_response(token, request_id, response, error=None):
+    """Submit inference response back to console"""
+    data = {
+        "id": request_id,
+        "status": "completed" if response else "failed",
+        "response": response,
+        "error": error
+    }
+    
+    body = json.dumps(data).encode('utf-8')
+    timestamp = str(int(time.time()))
+    signature = calculate_hmac(token, body, timestamp)
+    
+    req = Request(
+        f"{API_BASE}/v1/inference/complete",
+        data=body,
+        headers={
+            'Content-Type': 'application/json',
+            'X-Node-Id': NODE_ID,
+            'X-Node-Ts': timestamp,
+            'X-Node-Auth': signature
+        },
+        method='POST'
+    )
+    
+    try:
+        with urlopen(req, timeout=10) as response:
+            log(f"✓ Response submitted", GREEN)
+    except Exception as e:
+        log(f"✗ Failed to submit response: {e}", RED)
 
 def send_test_receipt(token):
     """Send a test receipt (optional - for testing)"""
@@ -321,23 +328,31 @@ Configuration:
         log(f"Sending test receipt...", BLUE)
         send_test_receipt(token)
     
-    # Start inference server in background thread
-    inference_port = 7860
-    inference_thread = threading.Thread(target=start_inference_server, args=(inference_port,), daemon=True)
-    inference_thread.start()
-    
     log(f"", "")
-    log(f"🔄 Starting heartbeat loop (every 10 seconds)...", BLUE)
-    log(f"   Inference server listening on port {inference_port}", BLUE)
+    log(f"🔄 Starting agent loop...", BLUE)
+    log(f"   Heartbeat: every 10 seconds", BLUE)
+    log(f"   Inference polling: every 2 seconds", BLUE)
     log(f"   Press Ctrl+C to stop", BLUE)
     log(f"", "")
     
-    # Main heartbeat loop
+    # Main loop with both heartbeat and inference polling
+    last_heartbeat = time.time()
+    
     try:
         while True:
-            time.sleep(10)
+            # Send heartbeat every 10 seconds
+            if time.time() - last_heartbeat >= 10:
+                ready, model_count, model_names = check_ollama_ready()
+                send_heartbeat(token, ready, model_count, model_names)
+                last_heartbeat = time.time()
+            
+            # Poll for inference requests if node is ready
             ready, model_count, model_names = check_ollama_ready()
-            send_heartbeat(token, ready, model_count, model_names)
+            if ready:
+                poll_for_inference_requests(token)
+            
+            # Short sleep to prevent busy waiting
+            time.sleep(2)
     except KeyboardInterrupt:
         log(f"", "")
         log(f"👋 Agent stopped by user", YELLOW)

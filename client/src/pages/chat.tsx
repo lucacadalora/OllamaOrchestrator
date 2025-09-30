@@ -47,6 +47,46 @@ export default function Chat() {
     }
   }, [modelsData, selectedModel]);
 
+  // Poll for streaming response
+  const pollForResponse = async (requestId: string, messageId: string) => {
+    const maxAttempts = 600; // 5 minutes (600 * 500ms)
+    let attempts = 0;
+    
+    while (attempts < maxAttempts) {
+      try {
+        const response = await fetch(`/api/v1/inference/status/${requestId}`);
+        const data = await response.json();
+        
+        if (data.response) {
+          // Update message with current response
+          setMessages(prev => prev.map(msg =>
+            msg.id === messageId
+              ? { ...msg, content: data.response, nodeId: data.nodeId }
+              : msg
+          ));
+        }
+        
+        if (data.done) {
+          if (data.error) {
+            toast({
+              title: "Inference Error",
+              description: data.error,
+              variant: "destructive",
+            });
+          }
+          break;
+        }
+        
+        // Wait before next poll
+        await new Promise(resolve => setTimeout(resolve, 500));
+        attempts++;
+      } catch (error) {
+        console.error("Polling error:", error);
+        break;
+      }
+    }
+  };
+
   // Send message mutation
   const sendMutation = useMutation({
     mutationFn: async (message: string) => {
@@ -59,16 +99,21 @@ export default function Chat() {
       });
       return response.json();
     },
-    onSuccess: (data) => {
-      // Add assistant response
+    onSuccess: async (data) => {
+      // Add placeholder assistant message
+      const assistantMessageId = `msg-${Date.now()}-assistant`;
       const assistantMessage: Message = {
-        id: `msg-${Date.now()}-assistant`,
+        id: assistantMessageId,
         role: "assistant",
-        content: data.response || `Error: No response from node ${data.nodeId}`,
+        content: "...",
         timestamp: new Date(),
-        nodeId: data.nodeId,
       };
       setMessages(prev => [...prev, assistantMessage]);
+      
+      // Start polling for streaming response
+      if (data.requestId) {
+        await pollForResponse(data.requestId, assistantMessageId);
+      }
     },
     onError: (error) => {
       toast({

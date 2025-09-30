@@ -589,8 +589,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get available models from active nodes
-  app.get("/api/v1/models", requireAuth, async (req, res) => {
+  // Get available models from active nodes (public endpoint)
+  app.get("/api/v1/models", async (req, res) => {
     try {
       const activeNodes = await storage.listNodes({ status: "active" });
       const modelsMap = new Map<string, string[]>();
@@ -599,9 +599,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const now = new Date();
       const thirtySecondsAgo = new Date(now.getTime() - 30000);
       
+      console.log(`[Models] Checking ${activeNodes.length} active nodes at ${now.toISOString()}`);
+      
       activeNodes.forEach(node => {
+        const lastHeartbeat = node.lastHeartbeat ? new Date(node.lastHeartbeat) : null;
+        const isOnline = lastHeartbeat && lastHeartbeat >= thirtySecondsAgo;
+        
+        console.log(`[Models] Node ${node.id}: lastHeartbeat=${lastHeartbeat?.toISOString() || 'never'}, isOnline=${isOnline}, models=${node.models?.join(',') || 'none'}`);
+        
         // Skip nodes that are offline (no heartbeat in last 30 seconds)
-        if (!node.lastHeartbeat || new Date(node.lastHeartbeat) < thirtySecondsAgo) {
+        if (!isOnline) {
           return;
         }
         
@@ -620,6 +627,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         nodes: nodeIds
       }));
       
+      console.log(`[Models] Returning ${availableModels.length} models:`, availableModels.map(m => `${m.model}(${m.nodeCount})`).join(', '));
+      
       res.json({ models: availableModels });
     } catch (error) {
       console.error("Models fetch error:", error);
@@ -627,8 +636,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Inference routing endpoint - Queue-based system
-  app.post("/api/v1/inference/chat", requireAuth, async (req, res) => {
+  // Inference routing endpoint - Queue-based system (public endpoint)
+  app.post("/api/v1/inference/chat", async (req, res) => {
     try {
       const { model, messages } = req.body;
       

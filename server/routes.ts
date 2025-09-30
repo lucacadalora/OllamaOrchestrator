@@ -16,6 +16,18 @@ const nodeFiltersSchema = z.object({
   runtime: RuntimeEnum.optional(),
 });
 
+const earningsCalculateSchema = z.object({
+  nodeId: z.string().min(1),
+  periodStart: z.coerce.date(),
+  periodEnd: z.coerce.date(),
+}).refine(data => data.periodEnd > data.periodStart, {
+  message: "periodEnd must be after periodStart",
+});
+
+const payoutUpdateSchema = z.object({
+  ready: z.boolean(),
+});
+
 // Authentication middleware
 function requireAuth(req: any, res: any, next: any) {
   if (!req.session?.userId) {
@@ -313,6 +325,138 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Get node error:", error);
       res.status(500).json({ error: "Failed to get node" });
+    }
+  });
+
+  // Earnings endpoints
+  app.get("/api/v1/earnings", requireAuth, async (req, res) => {
+    try {
+      const role = req.session.role;
+      const userId = req.session.userId!;
+      
+      let allEarnings: any[] = [];
+      
+      if (role === "operator") {
+        // Operators see their own earnings
+        allEarnings = await storage.getEarningsByUser(userId);
+      } else {
+        // Admins and viewers see all earnings (get from all nodes)
+        const allNodes = await storage.listNodes({});
+        for (const node of allNodes) {
+          const nodeEarnings = await storage.getEarningsByNode(node.id);
+          allEarnings.push(...nodeEarnings);
+        }
+      }
+      
+      // Convert numeric fields to numbers
+      const serialized = allEarnings.map(e => ({
+        ...e,
+        feesUsd: parseFloat(e.feesUsd as any),
+        jtvoEst: parseFloat(e.jtvoEst as any),
+      }));
+      
+      res.json(serialized);
+    } catch (error) {
+      console.error("List earnings error:", error);
+      res.status(500).json({ error: "Failed to list earnings" });
+    }
+  });
+
+  app.post("/api/v1/earnings/calculate", requireRole("admin", "operator"), async (req, res) => {
+    try {
+      const data = earningsCalculateSchema.parse(req.body);
+      const { nodeId, periodStart, periodEnd } = data;
+      
+      // Verify the node exists and user has permission
+      const node = await storage.getNode(nodeId);
+      if (!node) {
+        return res.status(404).json({ error: "Node not found" });
+      }
+      
+      const role = req.session.role;
+      const userId = req.session.userId!;
+      
+      if (role === "operator" && node.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      // Check for existing earnings in this period (idempotency)
+      const existingEarnings = await storage.getEarningsByNode(nodeId);
+      const duplicate = existingEarnings.find(e => 
+        e.periodStart.getTime() === periodStart.getTime() && 
+        e.periodEnd.getTime() === periodEnd.getTime()
+      );
+      
+      if (duplicate) {
+        return res.status(409).json({ 
+          error: "Earnings already calculated for this period",
+          existing: {
+            ...duplicate,
+            feesUsd: parseFloat(duplicate.feesUsd as any),
+            jtvoEst: parseFloat(duplicate.jtvoEst as any),
+          }
+        });
+      }
+      
+      // Get receipts in the period
+      const receipts = await storage.listReceipts({ nodeId });
+      const periodReceipts = receipts.filter(r => {
+        const createdAt = new Date(r.createdAt);
+        return createdAt >= periodStart && createdAt <= periodEnd;
+      });
+      
+      // Calculate earnings (simple example: $0.01 per request)
+      const requestCount = periodReceipts.length;
+      const feesUsd = requestCount * 0.01;
+      
+      // JTVO estimation (example: 1 JTVO per $0.10)
+      const jtvoEst = feesUsd * 10;
+      
+      // Create earning record
+      const earning = await storage.createEarning({
+        nodeId,
+        periodStart,
+        periodEnd,
+        feesUsd: feesUsd.toString(),
+        jtvoEst: jtvoEst.toString(),
+        payoutReady: false,
+      });
+      
+      res.json({
+        ...earning,
+        feesUsd: parseFloat(earning.feesUsd as any),
+        jtvoEst: parseFloat(earning.jtvoEst as any),
+      });
+    } catch (error) {
+      console.error("Calculate earnings error:", error);
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else {
+        res.status(500).json({ error: "Failed to calculate earnings" });
+      }
+    }
+  });
+
+  app.patch("/api/v1/earnings/:id/payout", requireRole("admin"), async (req, res) => {
+    try {
+      const earningId = z.coerce.number().positive().parse(req.params.id);
+      const { ready } = payoutUpdateSchema.parse(req.body);
+      
+      // Verify the earning exists
+      const earning = await storage.getEarning(earningId);
+      if (!earning) {
+        return res.status(404).json({ error: "Earning not found" });
+      }
+      
+      await storage.markPayoutReady(earningId, ready);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Mark payout error:", error);
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else {
+        res.status(500).json({ error: "Failed to update payout status" });
+      }
     }
   });
 

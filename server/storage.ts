@@ -23,6 +23,13 @@ export interface IStorage {
   createReceipt(receipt: InsertReceipt): Promise<Receipt>;
   listReceipts(filters?: { nodeId?: string; limit?: number }): Promise<Receipt[]>;
   
+  // Earnings
+  createEarning(earning: Omit<Earning, "id">): Promise<Earning>;
+  getEarning(earningId: number): Promise<Earning | undefined>;
+  getEarningsByNode(nodeId: string): Promise<Earning[]>;
+  getEarningsByUser(userId: string): Promise<Earning[]>;
+  markPayoutReady(earningId: number, ready: boolean): Promise<void>;
+  
   // Summary data
   getSummary(): Promise<{
     activeNodes: number;
@@ -186,6 +193,62 @@ export class DatabaseStorage implements IStorage {
       avgP95,
       requests24h
     };
+  }
+
+  async createEarning(earning: Omit<Earning, "id">): Promise<Earning> {
+    const [result] = await db
+      .insert(earnings)
+      .values(earning)
+      .returning();
+    return result;
+  }
+
+  async getEarning(earningId: number): Promise<Earning | undefined> {
+    const [earning] = await db
+      .select()
+      .from(earnings)
+      .where(eq(earnings.id, earningId));
+    return earning || undefined;
+  }
+
+  async getEarningsByNode(nodeId: string): Promise<Earning[]> {
+    return await db
+      .select()
+      .from(earnings)
+      .where(eq(earnings.nodeId, nodeId))
+      .orderBy(desc(earnings.periodEnd));
+  }
+
+  async getEarningsByUser(userId: string): Promise<Earning[]> {
+    const userNodes = await db
+      .select()
+      .from(nodes)
+      .where(eq(nodes.userId, userId));
+    
+    if (userNodes.length === 0) {
+      return [];
+    }
+    
+    const nodeIds = userNodes.map(n => n.id);
+    const results = [];
+    
+    for (const nodeId of nodeIds) {
+      const nodeEarnings = await db
+        .select()
+        .from(earnings)
+        .where(eq(earnings.nodeId, nodeId))
+        .orderBy(desc(earnings.periodEnd));
+      results.push(...nodeEarnings);
+    }
+    
+    return results;
+  }
+
+  async markPayoutReady(earningId: number, ready: boolean): Promise<void> {
+    await db
+      .update(earnings)
+      .set({ payoutReady: ready })
+      .where(eq(earnings.id, earningId));
   }
 }
 

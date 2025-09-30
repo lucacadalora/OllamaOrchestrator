@@ -208,10 +208,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const nodeSecret = generateNodeSecret();
       
       // Create node
-      await storage.createNode({
-        ...data,
-        status: "pending" as StatusEnum,
-      });
+      await storage.createNode(data);
       
       // Store the secret
       await storage.createNodeSecret(data.id, nodeSecret);

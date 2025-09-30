@@ -460,6 +460,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get node metrics (latency percentiles, etc.)
+  app.get("/api/v1/nodes/:id/metrics", requireAuth, async (req, res) => {
+    try {
+      const nodeId = req.params.id;
+      const timeWindow = (req.query.window as string) || "24h";
+      
+      // Verify the node exists
+      const node = await storage.getNode(nodeId);
+      if (!node) {
+        return res.status(404).json({ error: "Node not found" });
+      }
+      
+      // Check RBAC permissions
+      const role = req.session.role;
+      const userId = req.session.userId!;
+      
+      if (role === "operator" && node.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      // Get receipts for this node
+      const allReceipts = await storage.listReceipts({ nodeId });
+      
+      // Filter by time window
+      const now = Date.now();
+      const timeWindowMs = {
+        "1h": 60 * 60 * 1000,
+        "24h": 24 * 60 * 60 * 1000,
+        "7d": 7 * 24 * 60 * 60 * 1000,
+        "30d": 30 * 24 * 60 * 60 * 1000,
+      }[timeWindow] || 24 * 60 * 60 * 1000;
+      
+      const receipts = allReceipts.filter(r => {
+        const receiptTime = new Date(r.createdAt).getTime();
+        return (now - receiptTime) <= timeWindowMs;
+      });
+      
+      if (receipts.length === 0) {
+        return res.json({
+          nodeId,
+          timeWindow,
+          requestCount: 0,
+          latency: null,
+          tokens: null,
+          cacheHitRate: 0,
+        });
+      }
+      
+      // Extract latency values (p95_ms from payload)
+      const latencies = receipts
+        .map(r => (r.payload as any)?.p95_ms)
+        .filter(l => typeof l === "number" && !isNaN(l))
+        .sort((a, b) => a - b);
+      
+      // Calculate percentiles
+      const percentile = (arr: number[], p: number) => {
+        if (arr.length === 0) return 0;
+        const index = Math.ceil((p / 100) * arr.length) - 1;
+        return arr[Math.max(0, index)];
+      };
+      
+      // Calculate token stats
+      const tokenStats = receipts.reduce((acc, r) => {
+        const payload = r.payload as any;
+        return {
+          input: acc.input + (payload?.tokens_input || 0),
+          output: acc.output + (payload?.tokens_output || 0),
+        };
+      }, { input: 0, output: 0 });
+      
+      // Calculate cache hit rate
+      const cacheHits = receipts.filter(r => (r.payload as any)?.cache_hit === true).length;
+      const cacheHitRate = receipts.length > 0 ? (cacheHits / receipts.length) * 100 : 0;
+      
+      res.json({
+        nodeId,
+        timeWindow,
+        requestCount: receipts.length,
+        latency: latencies.length > 0 ? {
+          p50: percentile(latencies, 50),
+          p95: percentile(latencies, 95),
+          p99: percentile(latencies, 99),
+          min: Math.min(...latencies),
+          max: Math.max(...latencies),
+          avg: latencies.reduce((a, b) => a + b, 0) / latencies.length,
+        } : null,
+        tokens: {
+          totalInput: tokenStats.input,
+          totalOutput: tokenStats.output,
+          avgInput: Math.round(tokenStats.input / receipts.length),
+          avgOutput: Math.round(tokenStats.output / receipts.length),
+        },
+        cacheHitRate: Math.round(cacheHitRate * 100) / 100,
+      });
+    } catch (error) {
+      console.error("Get node metrics error:", error);
+      res.status(500).json({ error: "Failed to get node metrics" });
+    }
+  });
+
   // List receipts - requires auth with RBAC
   app.get("/api/v1/receipts", requireAuth, async (req, res) => {
     try {

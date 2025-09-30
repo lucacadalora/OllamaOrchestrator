@@ -1,10 +1,17 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/ui/status-badge";
-import { Eye, Laptop, Server, Monitor } from "lucide-react";
+import { Eye, Laptop, Server, Monitor, Activity, Zap, TrendingUp } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 interface Node {
   id: string;
@@ -16,13 +23,41 @@ interface Node {
   lastHeartbeat: string | null;
 }
 
+interface NodeMetrics {
+  nodeId: string;
+  timeWindow: string;
+  requestCount: number;
+  latency: {
+    p50: number;
+    p95: number;
+    p99: number;
+    min: number;
+    max: number;
+    avg: number;
+  } | null;
+  tokens: {
+    totalInput: number;
+    totalOutput: number;
+    avgInput: number;
+    avgOutput: number;
+  } | null;
+  cacheHitRate: number;
+}
+
 export default function Nodes() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [regionFilter, setRegionFilter] = useState<string>("all");
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [metricsWindow, setMetricsWindow] = useState<string>("24h");
 
   const { data: nodes = [], isLoading } = useQuery<Node[]>({
     queryKey: ["/api/v1/nodes"],
     refetchInterval: 5000,
+  });
+
+  const { data: metrics, isLoading: metricsLoading } = useQuery<NodeMetrics>({
+    queryKey: ["/api/v1/nodes", selectedNode, "metrics", metricsWindow],
+    enabled: !!selectedNode,
   });
 
   const filteredNodes = nodes.filter(node => {
@@ -167,6 +202,7 @@ export default function Nodes() {
                         <Button 
                           variant="ghost" 
                           size="sm"
+                          onClick={() => setSelectedNode(node.id)}
                           data-testid={`view-node-${node.id}`}
                         >
                           <Eye className="w-4 h-4" />
@@ -186,6 +222,163 @@ export default function Nodes() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Node Metrics Dialog */}
+      <Dialog open={!!selectedNode} onOpenChange={(open) => !open && setSelectedNode(null)}>
+        <DialogContent className="max-w-5xl max-h-[85vh] overflow-auto" data-testid="node-metrics-modal">
+          <DialogHeader>
+            <div className="flex items-center justify-between">
+              <DialogTitle>Node Metrics: {selectedNode}</DialogTitle>
+              <Select value={metricsWindow} onValueChange={setMetricsWindow}>
+                <SelectTrigger className="w-32" data-testid="select-metrics-window">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1h">Last Hour</SelectItem>
+                  <SelectItem value="24h">Last 24h</SelectItem>
+                  <SelectItem value="7d">Last 7 Days</SelectItem>
+                  <SelectItem value="30d">Last 30 Days</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </DialogHeader>
+
+          {metricsLoading ? (
+            <div className="space-y-4">
+              <div className="h-32 bg-muted rounded animate-pulse" />
+              <div className="h-64 bg-muted rounded animate-pulse" />
+            </div>
+          ) : metrics ? (
+            <div className="space-y-6">
+              {/* Summary Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <Activity className="h-4 w-4 text-primary" />
+                      Request Count
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-2xl font-bold" data-testid="text-request-count">
+                      {metrics.requestCount.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      in {metrics.timeWindow}
+                    </p>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4 text-primary" />
+                      Avg Latency
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-2xl font-bold" data-testid="text-avg-latency">
+                      {metrics.latency ? `${Math.round(metrics.latency.avg)}ms` : "—"}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      P95: {metrics.latency ? `${Math.round(metrics.latency.p95)}ms` : "—"}
+                    </p>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-primary" />
+                      Cache Hit Rate
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-2xl font-bold" data-testid="text-cache-hit-rate">
+                      {metrics.cacheHitRate.toFixed(1)}%
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      cache efficiency
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Latency Chart */}
+              {metrics.latency && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Latency Distribution</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart
+                        data={[
+                          { name: "Min", value: metrics.latency.min },
+                          { name: "P50", value: metrics.latency.p50 },
+                          { name: "Avg", value: metrics.latency.avg },
+                          { name: "P95", value: metrics.latency.p95 },
+                          { name: "P99", value: metrics.latency.p99 },
+                          { name: "Max", value: metrics.latency.max },
+                        ]}
+                        margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" />
+                        <YAxis label={{ value: "Latency (ms)", angle: -90, position: "insideLeft" }} />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey="value" fill="hsl(var(--primary))" name="Latency (ms)" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Token Stats */}
+              {metrics.tokens && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Token Statistics</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <p className="text-sm text-muted-foreground">Total Input</p>
+                        <p className="text-xl font-bold mt-1" data-testid="text-total-input">
+                          {metrics.tokens.totalInput.toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Total Output</p>
+                        <p className="text-xl font-bold mt-1" data-testid="text-total-output">
+                          {metrics.tokens.totalOutput.toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Avg Input</p>
+                        <p className="text-xl font-bold mt-1" data-testid="text-avg-input">
+                          {metrics.tokens.avgInput.toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Avg Output</p>
+                        <p className="text-xl font-bold mt-1" data-testid="text-avg-output">
+                          {metrics.tokens.avgOutput.toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              No metrics data available for this node
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

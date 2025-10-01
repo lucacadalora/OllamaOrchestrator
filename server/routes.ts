@@ -7,6 +7,7 @@ import { insertNodeSchema, heartbeatSchema, insertReceiptSchema, RuntimeEnum, St
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { ReceiptGenerator } from "./receiptGenerator";
+import { geolocationService } from "./services/geolocation";
 import fs from "fs";
 import path from "path";
 
@@ -306,6 +307,20 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
         
         await storage.updateNodeStatus(nodeId, newStatus, ipAddress);
         await storage.updateNodeHeartbeat(nodeId, data.models || []);
+        
+        // Lookup geolocation if we have an IP and no location yet
+        if (ipAddress && !node.city && !node.country) {
+          const location = await geolocationService.lookupIp(ipAddress);
+          if (location) {
+            await storage.updateNodeLocation(
+              nodeId, 
+              location.city, 
+              location.country, 
+              location.latitude, 
+              location.longitude
+            );
+          }
+        }
         
         // Re-fetch node to get latest state after updates (handles race with stale cleanup)
         const updatedNode = await storage.getNode(nodeId);

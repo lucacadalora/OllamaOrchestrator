@@ -12,7 +12,8 @@ export interface IStorage {
   createNode(node: InsertNode & { userId?: string }): Promise<Node>;
   getNode(id: string): Promise<Node | undefined>;
   updateNodeStatus(id: string, status: string, ipAddress?: string): Promise<void>;
-  updateNodeHeartbeat(id: string): Promise<void>;
+  updateNodeLocation(id: string, city: string, country: string, latitude: number, longitude: number): Promise<void>;
+  updateNodeHeartbeat(id: string, models?: string[]): Promise<void>;
   listNodes(filters?: { status?: string; region?: string; runtime?: string; userId?: string }): Promise<Node[]>;
   
   // Node secrets
@@ -107,6 +108,18 @@ export class DatabaseStorage implements IStorage {
     await db
       .update(nodes)
       .set(updateData)
+      .where(eq(nodes.id, id));
+  }
+
+  async updateNodeLocation(id: string, city: string, country: string, latitude: number, longitude: number): Promise<void> {
+    await db
+      .update(nodes)
+      .set({ 
+        city, 
+        country, 
+        latitude: latitude.toString(), 
+        longitude: longitude.toString() 
+      })
       .where(eq(nodes.id, id));
   }
 

@@ -3,8 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import StatusBadge from "@/components/ui/status-badge";
-import { Eye, Laptop, Server, Monitor, Activity, Zap, TrendingUp, Clock } from "lucide-react";
+import { Eye, Laptop, Server, Monitor, Activity, Zap, TrendingUp, Clock, Map } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -12,18 +13,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { NodeMap } from "@/components/NodeMap";
+import { LocationStats } from "@/components/LocationStats";
+import type { Node as SchemaNode } from "@shared/schema";
 
-interface Node {
-  id: string;
-  region: string;
-  runtime: string;
-  status: "active" | "pending" | "offline" | "quarantine";
-  reputation: number;
-  greenEnergy: boolean;
-  lastHeartbeat: string | null;
-  onlineSince: string | null;
-  totalUptime: string;
-}
+type Node = SchemaNode;
 
 interface NodeMetrics {
   nodeId: string;
@@ -201,10 +195,23 @@ export default function Nodes() {
       </header>
 
       <div className="p-6">
-        <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full">
+        <Tabs defaultValue="list" className="w-full">
+          <TabsList className="mb-6">
+            <TabsTrigger value="list" data-testid="tab-nodes-list">
+              <Server className="w-4 h-4 mr-2" />
+              Nodes List
+            </TabsTrigger>
+            <TabsTrigger value="map" data-testid="tab-location-map">
+              <Map className="w-4 h-4 mr-2" />
+              Location Map
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="list">
+            <Card>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
                 <thead className="bg-muted">
                   <tr>
                     <th className="text-left py-3 px-4 font-medium text-muted-foreground text-sm">Node ID</th>
@@ -233,7 +240,7 @@ export default function Nodes() {
                         </div>
                       </td>
                       <td className="py-4 px-4">
-                        <StatusBadge status={node.status} />
+                        <StatusBadge status={node.status as "pending" | "active" | "offline" | "quarantine"} />
                       </td>
                       <td className="py-4 px-4 text-sm text-foreground">{node.region}</td>
                       <td className="py-4 px-4">
@@ -246,25 +253,25 @@ export default function Nodes() {
                           <div className="w-12 bg-muted rounded-full h-2">
                             <div 
                               className={`h-2 rounded-full ${
-                                node.reputation >= 80 ? "bg-success" : 
-                                node.reputation >= 60 ? "bg-warning" : "bg-destructive"
+                                parseFloat(node.reputation || "0") >= 80 ? "bg-success" : 
+                                parseFloat(node.reputation || "0") >= 60 ? "bg-warning" : "bg-destructive"
                               }`}
-                              style={{ width: `${node.reputation}%` }}
+                              style={{ width: `${parseFloat(node.reputation || "0")}%` }}
                             ></div>
                           </div>
-                          <span className="text-sm text-foreground">{Math.round(node.reputation)}</span>
+                          <span className="text-sm text-foreground">{Math.round(parseFloat(node.reputation || "0"))}</span>
                         </div>
                       </td>
                       <td className="py-4 px-4">
                         <div className="flex items-center space-x-2">
                           <Clock className="w-3 h-3 text-muted-foreground" />
                           <span className="text-sm font-mono text-foreground">
-                            {formatUptime(node.onlineSince, node.totalUptime)}
+                            {formatUptime(node.onlineSince ? new Date(node.onlineSince).toISOString() : null, node.totalUptime || "0")}
                           </span>
                         </div>
                       </td>
                       <td className="py-4 px-4 text-sm text-muted-foreground">
-                        {formatTimeAgo(node.lastHeartbeat)}
+                        {formatTimeAgo(node.lastHeartbeat ? new Date(node.lastHeartbeat).toISOString() : null)}
                       </td>
                       <td className="py-4 px-4">
                         <Button 
@@ -289,7 +296,16 @@ export default function Nodes() {
             </div>
           </CardContent>
         </Card>
-      </div>
+      </TabsContent>
+
+      <TabsContent value="map">
+        <div className="space-y-6">
+          <NodeMap nodes={filteredNodes} />
+          <LocationStats nodes={filteredNodes} />
+        </div>
+      </TabsContent>
+    </Tabs>
+  </div>
 
       {/* Node Metrics Dialog */}
       <Dialog open={!!selectedNode} onOpenChange={(open) => !open && setSelectedNode(null)}>

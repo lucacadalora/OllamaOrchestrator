@@ -190,7 +190,8 @@
 
   /* Fix for inline code in primary color messages */
   .bg-primary .prose code {
-    @apply bg-primary-foreground/20 text-primary-foreground;
+    background-color: rgba(255, 255, 255, 0.2);
+    @apply text-primary-foreground;
   }
 
   .bg-primary .prose a {

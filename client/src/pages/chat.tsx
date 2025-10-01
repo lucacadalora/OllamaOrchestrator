@@ -9,6 +9,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useWebSocketChat } from "@/hooks/useWebSocketChat";
+import { MessageContent } from "@/components/MessageContent";
 
 interface Message {
   id: string;
@@ -312,7 +313,11 @@ export default function Chat() {
                         : "bg-muted"
                     }`}
                   >
-                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    {message.role === "user" ? (
+                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    ) : (
+                      <MessageContent content={message.content} className="text-sm" />
+                    )}
                     {message.nodeId && (
                       <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/20">
                         <Cpu className="w-3 h-3" />

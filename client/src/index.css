@@ -119,4 +119,81 @@
   .refresh-indicator {
     @apply animate-spin;
   }
+
+  /* Markdown styling for chat messages */
+  .prose {
+    line-height: 1.6;
+  }
+
+  .prose pre {
+    @apply bg-gray-900 text-gray-100 rounded-lg p-4 my-4 overflow-x-auto;
+  }
+
+  .dark .prose pre {
+    @apply bg-gray-950;
+  }
+
+  .prose code {
+    @apply font-mono text-sm;
+  }
+
+  .prose table {
+    @apply w-full my-4;
+  }
+
+  .prose th {
+    @apply text-left font-semibold;
+  }
+
+  .prose td,
+  .prose th {
+    @apply px-3 py-2;
+  }
+
+  .prose blockquote {
+    @apply border-l-4 border-primary pl-4 italic my-4;
+  }
+
+  .prose strong {
+    @apply font-bold;
+  }
+
+  .prose em {
+    @apply italic;
+  }
+
+  .prose ul {
+    @apply list-disc pl-6 space-y-1 my-2;
+  }
+
+  .prose ol {
+    @apply list-decimal pl-6 space-y-1 my-2;
+  }
+
+  .prose h1,
+  .prose h2,
+  .prose h3,
+  .prose h4,
+  .prose h5,
+  .prose h6 {
+    @apply font-semibold my-2;
+  }
+
+  /* KaTeX math styling */
+  .katex-display {
+    @apply my-4 overflow-x-auto;
+  }
+
+  .katex {
+    @apply text-base;
+  }
+
+  /* Fix for inline code in primary color messages */
+  .bg-primary .prose code {
+    @apply bg-primary-foreground/20 text-primary-foreground;
+  }
+
+  .bg-primary .prose a {
+    @apply text-primary-foreground underline;
+  }
 }

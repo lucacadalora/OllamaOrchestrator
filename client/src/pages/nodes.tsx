@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/ui/status-badge";
-import { Eye, Laptop, Server, Monitor, Activity, Zap, TrendingUp } from "lucide-react";
+import { Eye, Laptop, Server, Monitor, Activity, Zap, TrendingUp, Clock } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +21,8 @@ interface Node {
   reputation: number;
   greenEnergy: boolean;
   lastHeartbeat: string | null;
+  onlineSince: string | null;
+  totalUptime: string;
 }
 
 interface NodeMetrics {
@@ -44,11 +46,21 @@ interface NodeMetrics {
   cacheHitRate: number;
 }
 
+interface NodeSession {
+  id: number;
+  nodeId: string;
+  startTime: string;
+  endTime: string | null;
+  duration: string | null;
+  status: string;
+}
+
 export default function Nodes() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [regionFilter, setRegionFilter] = useState<string>("all");
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [metricsWindow, setMetricsWindow] = useState<string>("24h");
+  const [currentTime, setCurrentTime] = useState(Date.now());
 
   const { data: nodes = [], isLoading } = useQuery<Node[]>({
     queryKey: ["/api/v1/nodes"],
@@ -59,6 +71,18 @@ export default function Nodes() {
     queryKey: ["/api/v1/nodes", selectedNode, "metrics", metricsWindow],
     enabled: !!selectedNode,
   });
+
+  const { data: sessions = [], isLoading: sessionsLoading } = useQuery<NodeSession[]>({
+    queryKey: ["/api/v1/nodes", selectedNode, "sessions"],
+    enabled: !!selectedNode,
+  });
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const filteredNodes = nodes.filter(node => {
     if (statusFilter !== "all" && node.status !== statusFilter) return false;
@@ -87,6 +111,45 @@ export default function Nodes() {
     if (minutes < 60) return `${minutes}m ago`;
     const hours = Math.floor(minutes / 60);
     return `${hours}h ago`;
+  };
+
+  const formatUptime = (onlineSince: string | null, totalUptime: string) => {
+    if (!onlineSince) {
+      const total = parseFloat(totalUptime || "0");
+      if (total === 0) return "—";
+      
+      const days = Math.floor(total / 86400);
+      const hours = Math.floor((total % 86400) / 3600);
+      const minutes = Math.floor((total % 3600) / 60);
+      
+      if (days > 0) return `${days}d ${hours}h total`;
+      if (hours > 0) return `${hours}h ${minutes}m total`;
+      return `${minutes}m total`;
+    }
+
+    const uptimeSeconds = Math.floor((currentTime - new Date(onlineSince).getTime()) / 1000);
+    const days = Math.floor(uptimeSeconds / 86400);
+    const hours = Math.floor((uptimeSeconds % 86400) / 3600);
+    const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+  };
+
+  const formatDuration = (seconds: number) => {
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+  };
+
+  const formatDate = (timestamp: string) => {
+    const date = new Date(timestamp);
+    return date.toLocaleDateString() + " " + date.toLocaleTimeString();
   };
 
   if (isLoading) {
@@ -149,7 +212,7 @@ export default function Nodes() {
                     <th className="text-left py-3 px-4 font-medium text-muted-foreground text-sm">Region</th>
                     <th className="text-left py-3 px-4 font-medium text-muted-foreground text-sm">Runtime</th>
                     <th className="text-left py-3 px-4 font-medium text-muted-foreground text-sm">Reputation</th>
-                    <th className="text-left py-3 px-4 font-medium text-muted-foreground text-sm">P95 Latency</th>
+                    <th className="text-left py-3 px-4 font-medium text-muted-foreground text-sm">Uptime</th>
                     <th className="text-left py-3 px-4 font-medium text-muted-foreground text-sm">Last Heartbeat</th>
                     <th className="text-left py-3 px-4 font-medium text-muted-foreground text-sm">Actions</th>
                   </tr>
@@ -192,8 +255,13 @@ export default function Nodes() {
                           <span className="text-sm text-foreground">{Math.round(node.reputation)}</span>
                         </div>
                       </td>
-                      <td className="py-4 px-4 font-mono text-sm text-foreground">
-                        {node.status === "active" ? "~250ms" : "—"}
+                      <td className="py-4 px-4">
+                        <div className="flex items-center space-x-2">
+                          <Clock className="w-3 h-3 text-muted-foreground" />
+                          <span className="text-sm font-mono text-foreground">
+                            {formatUptime(node.onlineSince, node.totalUptime)}
+                          </span>
+                        </div>
                       </td>
                       <td className="py-4 px-4 text-sm text-muted-foreground">
                         {formatTimeAgo(node.lastHeartbeat)}
@@ -371,6 +439,70 @@ export default function Nodes() {
                   </CardContent>
                 </Card>
               )}
+
+              {/* Session History */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Clock className="h-5 w-5" />
+                    Uptime History
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {sessionsLoading ? (
+                    <div className="h-32 bg-muted rounded animate-pulse" />
+                  ) : sessions.length > 0 ? (
+                    <div className="space-y-3">
+                      {sessions.map((session) => (
+                        <div
+                          key={session.id}
+                          className="flex items-center justify-between p-3 bg-muted/50 rounded-lg"
+                        >
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-medium">
+                                {session.status === "active" ? (
+                                  <span className="text-green-600 dark:text-green-400">● Online</span>
+                                ) : (
+                                  <span className="text-muted-foreground">○ Ended</span>
+                                )}
+                              </p>
+                              {session.status === "active" && (
+                                <span className="text-xs text-muted-foreground">
+                                  (current session)
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Started: {formatDate(session.startTime)}
+                            </p>
+                            {session.endTime && (
+                              <p className="text-xs text-muted-foreground">
+                                Ended: {formatDate(session.endTime)}
+                              </p>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-bold">
+                              {session.duration 
+                                ? formatDuration(parseFloat(session.duration))
+                                : formatDuration(Math.floor((currentTime - new Date(session.startTime).getTime()) / 1000))
+                              }
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {session.status === "active" ? "uptime" : "duration"}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-muted-foreground">
+                      No session history available
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           ) : (
             <div className="text-center py-8 text-muted-foreground">

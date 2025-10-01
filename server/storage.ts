@@ -1,6 +1,6 @@
-import { nodes, nodeSecrets, receipts, earnings, users, inferenceQueue, userReceipts, type Node, type InsertNode, type NodeSecret, type Receipt, type InsertReceipt, type Earning, type User, type InsertUser, type InferenceRequest, type UserReceipt, type InsertUserReceipt } from "@shared/schema";
+import { nodes, nodeSecrets, receipts, earnings, users, inferenceQueue, userReceipts, nodeSessions, type Node, type InsertNode, type NodeSecret, type Receipt, type InsertReceipt, type Earning, type User, type InsertUser, type InferenceRequest, type UserReceipt, type InsertUserReceipt, type NodeSession } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, gte } from "drizzle-orm";
+import { eq, desc, and, gte, lte } from "drizzle-orm";
 
 export interface IStorage {
   // User operations
@@ -18,6 +18,13 @@ export interface IStorage {
   // Node secrets
   createNodeSecret(nodeId: string, secret: string): Promise<void>;
   getNodeSecret(nodeId: string): Promise<string | undefined>;
+  
+  // Node uptime tracking
+  startNodeSession(nodeId: string): Promise<void>;
+  endNodeSession(nodeId: string): Promise<void>;
+  getNodeSessions(nodeId: string, limit?: number): Promise<NodeSession[]>;
+  updateNodeUptime(nodeId: string): Promise<void>;
+  endStaleNodeSessions(timeoutSeconds?: number): Promise<void>;
   
   // Receipts
   createReceipt(receipt: InsertReceipt): Promise<Receipt>;
@@ -152,6 +159,107 @@ export class DatabaseStorage implements IStorage {
       .from(nodeSecrets)
       .where(eq(nodeSecrets.nodeId, nodeId));
     return secret?.secret;
+  }
+
+  async startNodeSession(nodeId: string): Promise<void> {
+    const now = new Date();
+    
+    await db
+      .update(nodes)
+      .set({ onlineSince: now })
+      .where(eq(nodes.id, nodeId));
+    
+    await db
+      .insert(nodeSessions)
+      .values({
+        nodeId,
+        startTime: now,
+        status: "active"
+      });
+  }
+
+  async endNodeSession(nodeId: string): Promise<void> {
+    const now = new Date();
+    const node = await this.getNode(nodeId);
+    
+    if (!node || !node.onlineSince) {
+      return;
+    }
+    
+    const sessionDuration = Math.floor((now.getTime() - node.onlineSince.getTime()) / 1000);
+    const newTotalUptime = parseFloat(node.totalUptime || "0") + sessionDuration;
+    
+    const [activeSession] = await db
+      .select()
+      .from(nodeSessions)
+      .where(and(
+        eq(nodeSessions.nodeId, nodeId),
+        eq(nodeSessions.status, "active")
+      ))
+      .orderBy(desc(nodeSessions.startTime))
+      .limit(1);
+    
+    if (activeSession) {
+      await db
+        .update(nodeSessions)
+        .set({
+          endTime: now,
+          duration: sessionDuration.toString(),
+          status: "completed"
+        })
+        .where(eq(nodeSessions.id, activeSession.id));
+    }
+    
+    await db
+      .update(nodes)
+      .set({
+        onlineSince: null,
+        totalUptime: newTotalUptime.toString()
+      })
+      .where(eq(nodes.id, nodeId));
+  }
+
+  async getNodeSessions(nodeId: string, limit: number = 10): Promise<NodeSession[]> {
+    return await db
+      .select()
+      .from(nodeSessions)
+      .where(eq(nodeSessions.nodeId, nodeId))
+      .orderBy(desc(nodeSessions.startTime))
+      .limit(limit);
+  }
+
+  async updateNodeUptime(nodeId: string): Promise<void> {
+    const node = await this.getNode(nodeId);
+    
+    if (node && node.onlineSince) {
+      const now = new Date();
+      const currentSessionDuration = Math.floor((now.getTime() - node.onlineSince.getTime()) / 1000);
+      
+      await db
+        .update(nodes)
+        .set({ lastHeartbeat: now })
+        .where(eq(nodes.id, nodeId));
+    }
+  }
+
+  async endStaleNodeSessions(timeoutSeconds: number = 120): Promise<void> {
+    const timeoutAgo = new Date(Date.now() - timeoutSeconds * 1000);
+    
+    const staleNodes = await db
+      .select()
+      .from(nodes)
+      .where(and(
+        eq(nodes.status, "active"),
+        lte(nodes.lastHeartbeat, timeoutAgo)
+      ));
+    
+    for (const node of staleNodes) {
+      await this.endNodeSession(node.id);
+      await db
+        .update(nodes)
+        .set({ status: "offline" })
+        .where(eq(nodes.id, node.id));
+    }
   }
 
   async createReceipt(insertReceipt: InsertReceipt): Promise<Receipt> {

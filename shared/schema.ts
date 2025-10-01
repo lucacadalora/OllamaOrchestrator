@@ -24,12 +24,23 @@ export const nodes = pgTable("nodes", {
   models: text().array().default(sql`ARRAY[]::text[]`),
   ipAddress: text("ip_address"),
   lastHeartbeat: timestamp("last_heartbeat", { withTimezone: true }).defaultNow(),
+  onlineSince: timestamp("online_since", { withTimezone: true }),
+  totalUptime: numeric("total_uptime").default("0"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
 export const nodeSecrets = pgTable("node_secrets", {
   nodeId: text("node_id").primaryKey().references(() => nodes.id),
   secret: text("secret").notNull(),
+});
+
+export const nodeSessions = pgTable("node_sessions", {
+  id: serial("id").primaryKey(),
+  nodeId: text("node_id").notNull().references(() => nodes.id),
+  startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+  endTime: timestamp("end_time", { withTimezone: true }),
+  duration: numeric("duration"),
+  status: text("status").notNull().default("active"),
 });
 
 export const receipts = pgTable("receipts", {
@@ -117,6 +128,7 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Node = typeof nodes.$inferSelect;
 export type InsertNode = z.infer<typeof insertNodeSchema>;
 export type NodeSecret = typeof nodeSecrets.$inferSelect;
+export type NodeSession = typeof nodeSessions.$inferSelect;
 export type Receipt = typeof receipts.$inferSelect;
 export type InsertReceipt = z.infer<typeof insertReceiptSchema>;
 export type UserReceipt = typeof userReceipts.$inferSelect;

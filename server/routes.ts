@@ -172,6 +172,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
   // Public summary endpoint
   app.get("/api/v1/summary", async (req, res) => {
     try {
+      await storage.endStaleNodeSessions(120);
       const summary = await storage.getSummary();
       res.json(summary);
     } catch (error) {
@@ -301,8 +302,31 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
 
         // Update status based on readiness and update models list
         const newStatus = data.ready ? "active" : "pending";
+        const previousStatus = node.status;
+        
         await storage.updateNodeStatus(nodeId, newStatus, ipAddress);
         await storage.updateNodeHeartbeat(nodeId, data.models || []);
+        
+        // Re-fetch node to get latest state after updates (handles race with stale cleanup)
+        const updatedNode = await storage.getNode(nodeId);
+        if (!updatedNode) {
+          return res.status(404).json({ error: "Node not found after update" });
+        }
+        
+        // Start session if node is active but has no active session
+        if (newStatus === "active" && !updatedNode.onlineSince) {
+          await storage.startNodeSession(nodeId);
+        }
+        
+        // End session when node goes from active to another status
+        if (previousStatus === "active" && newStatus !== "active" && updatedNode.onlineSince) {
+          await storage.endNodeSession(nodeId);
+        }
+        
+        // Update uptime for active nodes with active sessions
+        if (newStatus === "active" && updatedNode.onlineSince) {
+          await storage.updateNodeUptime(nodeId);
+        }
 
         res.json({ status: newStatus, models: data.models || [] });
       } catch (error) {
@@ -389,6 +413,31 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     } catch (error) {
       console.error("Get node error:", error);
       res.status(500).json({ error: "Failed to get node" });
+    }
+  });
+
+  // Get node sessions (uptime history) - requires auth with RBAC
+  app.get("/api/v1/nodes/:id/sessions", requireAuth, async (req, res) => {
+    try {
+      const node = await storage.getNode(req.params.id);
+      if (!node) {
+        return res.status(404).json({ error: "Node not found" });
+      }
+      
+      // Check permissions
+      const role = req.session.role;
+      const userId = req.session.userId;
+      if (role === "operator" && node.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 10;
+      const sessions = await storage.getNodeSessions(req.params.id, limit);
+      
+      res.json(sessions);
+    } catch (error) {
+      console.error("Get sessions error:", error);
+      res.status(500).json({ error: "Failed to get sessions" });
     }
   });
 

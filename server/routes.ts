@@ -183,12 +183,12 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
   });
 
   // Serve agent script for download
-  app.get("/agent_mac_dev.py", (req, res) => {
+  app.get("/agent.py", (req, res) => {
     try {
-      const agentPath = path.join(process.cwd(), "agent_mac_dev.py");
+      const agentPath = path.join(process.cwd(), "agent.py");
       const agentContent = fs.readFileSync(agentPath, "utf-8");
       res.setHeader("Content-Type", "text/plain");
-      res.setHeader("Content-Disposition", "attachment; filename=agent_mac_dev.py");
+      res.setHeader("Content-Disposition", "attachment; filename=agent.py");
       res.send(agentContent);
     } catch (error) {
       console.error("Error serving agent script:", error);

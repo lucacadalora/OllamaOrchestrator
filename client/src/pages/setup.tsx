@@ -14,8 +14,9 @@ interface RegistrationResponse {
 }
 
 export default function Setup() {
-  const [nodeId, setNodeId] = useState(`macbook-${Math.random().toString(36).substr(2, 9)}`);
+  const [nodeId, setNodeId] = useState(`node-${Math.random().toString(36).substr(2, 9)}`);
   const [region, setRegion] = useState("ap-southeast");
+  const [selectedOS, setSelectedOS] = useState<"mac" | "windows">("mac");
   const [registrationData, setRegistrationData] = useState<RegistrationResponse | null>(null);
   const { toast } = useToast();
 
@@ -55,7 +56,8 @@ export default function Setup() {
     });
   };
 
-  const agentScript = registrationData ? `
+  // Generate OS-specific command
+  const getMacLinuxScript = () => registrationData ? `
 # Copy and paste this entire block into your terminal:
 
 DGON_API="${window.location.origin}/api" \\
@@ -64,11 +66,27 @@ REGION="${region}" \\
 NODE_TOKEN="${registrationData.nodeToken}" \\
 bash -c '
   echo "📥 Downloading DGON agent..."
-  curl -s -O ${window.location.origin}/agent_mac_dev.py
+  curl -s -o agent_mac_dev.py ${window.location.origin}/agent_mac_dev.py
   echo "🚀 Starting DGON node agent..."
   python3 -u agent_mac_dev.py
 '
 `.trim() : "";
+
+  const getWindowsScript = () => registrationData ? `
+REM Copy and paste these commands into Command Prompt:
+
+set DGON_API=${window.location.origin}/api
+set NODE_ID=${registrationData.nodeId}
+set REGION=${region}
+set NODE_TOKEN=${registrationData.nodeToken}
+
+echo Downloading DGON agent...
+curl -o agent_mac_dev.py ${window.location.origin}/agent_mac_dev.py
+echo Starting DGON node agent...
+python agent_mac_dev.py
+`.trim() : "";
+
+  const agentScript = selectedOS === "windows" ? getWindowsScript() : getMacLinuxScript();
 
   return (
     <div data-testid="setup-page">
@@ -81,14 +99,55 @@ bash -c '
         <div className="max-w-4xl">
           {/* Platform Selection */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <Card className="text-center cursor-pointer border-2 border-primary bg-primary/5">
+            <Card 
+              className={`text-center cursor-pointer border-2 transition-all ${
+                selectedOS === "mac" 
+                  ? "border-primary bg-primary/5" 
+                  : "border-border hover:border-primary/50"
+              }`}
+              onClick={() => setSelectedOS("mac")}
+            >
               <CardContent className="p-6">
-                <div className="w-16 h-16 bg-primary/10 rounded-lg flex items-center justify-center mx-auto mb-4">
-                  <Laptop className="w-8 h-8 text-primary" />
+                <div className={`w-16 h-16 rounded-lg flex items-center justify-center mx-auto mb-4 ${
+                  selectedOS === "mac" ? "bg-primary/10" : "bg-muted"
+                }`}>
+                  <Laptop className={`w-8 h-8 ${selectedOS === "mac" ? "text-primary" : "text-muted-foreground"}`} />
                 </div>
-                <h3 className="font-semibold text-foreground mb-2">macOS</h3>
-                <p className="text-sm text-muted-foreground">MacBook with Ollama</p>
-                <Badge className="mt-2 bg-primary text-primary-foreground">Supported</Badge>
+                <h3 className="font-semibold text-foreground mb-2">macOS / Linux</h3>
+                <p className="text-sm text-muted-foreground">Bash terminal</p>
+                <Badge className={`mt-2 ${
+                  selectedOS === "mac" 
+                    ? "bg-primary text-primary-foreground" 
+                    : "bg-muted text-muted-foreground"
+                }`}>
+                  {selectedOS === "mac" ? "Selected" : "Supported"}
+                </Badge>
+              </CardContent>
+            </Card>
+
+            <Card 
+              className={`text-center cursor-pointer border-2 transition-all ${
+                selectedOS === "windows" 
+                  ? "border-primary bg-primary/5" 
+                  : "border-border hover:border-primary/50"
+              }`}
+              onClick={() => setSelectedOS("windows")}
+            >
+              <CardContent className="p-6">
+                <div className={`w-16 h-16 rounded-lg flex items-center justify-center mx-auto mb-4 ${
+                  selectedOS === "windows" ? "bg-primary/10" : "bg-muted"
+                }`}>
+                  <Monitor className={`w-8 h-8 ${selectedOS === "windows" ? "text-primary" : "text-muted-foreground"}`} />
+                </div>
+                <h3 className="font-semibold text-foreground mb-2">Windows</h3>
+                <p className="text-sm text-muted-foreground">Command Prompt</p>
+                <Badge className={`mt-2 ${
+                  selectedOS === "windows" 
+                    ? "bg-primary text-primary-foreground" 
+                    : "bg-muted text-muted-foreground"
+                }`}>
+                  {selectedOS === "windows" ? "Selected" : "Supported"}
+                </Badge>
               </CardContent>
             </Card>
 
@@ -97,17 +156,7 @@ bash -c '
                 <div className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center mx-auto mb-4">
                   <Server className="w-8 h-8 text-muted-foreground" />
                 </div>
-                <h3 className="font-semibold text-muted-foreground mb-2">Linux</h3>
-                <p className="text-sm text-muted-foreground">Coming soon</p>
-              </CardContent>
-            </Card>
-
-            <Card className="text-center opacity-50">
-              <CardContent className="p-6">
-                <div className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center mx-auto mb-4">
-                  <Monitor className="w-8 h-8 text-muted-foreground" />
-                </div>
-                <h3 className="font-semibold text-muted-foreground mb-2">Windows</h3>
+                <h3 className="font-semibold text-muted-foreground mb-2">Docker</h3>
                 <p className="text-sm text-muted-foreground">Coming soon</p>
               </CardContent>
             </Card>
@@ -116,7 +165,7 @@ bash -c '
           {/* Setup Steps */}
           <Card>
             <CardHeader>
-              <CardTitle>Quick Setup (macOS)</CardTitle>
+              <CardTitle>Quick Setup ({selectedOS === "windows" ? "Windows" : "macOS / Linux"})</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-6">
@@ -128,21 +177,23 @@ bash -c '
                   <div className="flex-1">
                     <h4 className="font-medium text-foreground mb-2">Install Ollama</h4>
                     <p className="text-sm text-muted-foreground mb-3">
-                      Download and install Ollama on your Mac, then pull a model
+                      Download and install Ollama on your {selectedOS === "windows" ? "PC" : "Mac"}, then pull a model
                     </p>
                     <div className="space-y-2">
                       <div className="flex items-center space-x-2">
                         <a 
-                          href="https://ollama.com/download/mac"
+                          href={selectedOS === "windows" 
+                            ? "https://ollama.com/download/windows" 
+                            : "https://ollama.com/download/mac"}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 text-sm"
                         >
                           <Download className="w-4 h-4 mr-2" />
-                          Download Ollama for Mac
+                          Download Ollama for {selectedOS === "windows" ? "Windows" : "Mac"}
                         </a>
                       </div>
-                      <p className="text-xs text-muted-foreground">After installing, run in terminal:</p>
+                      <p className="text-xs text-muted-foreground">After installing, run in {selectedOS === "windows" ? "Command Prompt" : "terminal"}:</p>
                       <div className="flex items-center space-x-2">
                         <code className="block p-3 bg-muted rounded-md font-mono text-sm flex-1">
                           ollama pull llama3.2
@@ -167,7 +218,7 @@ bash -c '
                   <div className="flex-1">
                     <h4 className="font-medium text-foreground mb-2">Register Your Node</h4>
                     <p className="text-sm text-muted-foreground mb-3">
-                      Register your Mac as a compute node in the network
+                      Register your {selectedOS === "windows" ? "PC" : "machine"} as a compute node in the network
                     </p>
                     <div className="flex items-center space-x-2 mb-3">
                       <input

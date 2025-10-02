@@ -73,9 +73,9 @@ bash -c '
 `.trim() : "";
 
   const getWindowsScript = () => registrationData ? `
-REM Copy and paste this command into Command Prompt:
+# Copy and paste this into PowerShell (recommended for Windows):
 
-set DGON_API=${window.location.origin}/api && set NODE_ID=${registrationData.nodeId} && set REGION=${region} && set NODE_TOKEN=${registrationData.nodeToken} && curl -o agent.py ${window.location.origin}/agent.py && python agent.py
+$env:DGON_API="${window.location.origin}/api"; $env:NODE_ID="${registrationData.nodeId}"; $env:REGION="${region}"; $env:NODE_TOKEN="${registrationData.nodeToken}"; Invoke-WebRequest -Uri "${window.location.origin}/agent.py" -OutFile "agent.py"; python agent.py
 `.trim() : "";
 
   const agentScript = selectedOS === "windows" ? getWindowsScript() : getMacLinuxScript();
@@ -132,7 +132,7 @@ set DGON_API=${window.location.origin}/api && set NODE_ID=${registrationData.nod
                   <Monitor className={`w-8 h-8 ${selectedOS === "windows" ? "text-primary" : "text-muted-foreground"}`} />
                 </div>
                 <h3 className="font-semibold text-foreground mb-2">Windows</h3>
-                <p className="text-sm text-muted-foreground">Command Prompt</p>
+                <p className="text-sm text-muted-foreground">PowerShell</p>
                 <Badge className={`mt-2 ${
                   selectedOS === "windows" 
                     ? "bg-primary text-primary-foreground" 
@@ -185,7 +185,7 @@ set DGON_API=${window.location.origin}/api && set NODE_ID=${registrationData.nod
                           Download Ollama for {selectedOS === "windows" ? "Windows" : "Mac"}
                         </a>
                       </div>
-                      <p className="text-xs text-muted-foreground">After installing, run in {selectedOS === "windows" ? "Command Prompt" : "terminal"}:</p>
+                      <p className="text-xs text-muted-foreground">After installing, run in {selectedOS === "windows" ? "PowerShell" : "terminal"}:</p>
                       <div className="flex items-center space-x-2">
                         <code className="block p-3 bg-muted rounded-md font-mono text-sm flex-1">
                           ollama pull llama3.2

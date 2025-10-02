@@ -96,7 +96,7 @@ The signature is calculated as: `HMAC-SHA256(secret, body + timestamp)`. The ser
 - WebSocket support for serverless environments via `ws` package
 
 **Node Agent Integration**:
-- Python-based agent (`agent_mac_dev.py`) runs on operator machines
+- Python-based agent (`agent.py`) runs on operator machines (cross-platform: macOS, Linux, Windows)
 - Communicates with Ollama API at `http://127.0.0.1:11434/api/tags`
 - Posts heartbeats and receipts to the DGON Console API
 - Environment variables: `DGON_API`, `NODE_ID`, `REGION`, `NODE_TOKEN`

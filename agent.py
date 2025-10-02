@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-DGON Node Agent - MacBook with Ollama
-Connects your MacBook running Ollama to the DGON network as a compute node.
+DGON Node Agent
+Connects your machine running Ollama to the DGON network as a compute node.
+Works on macOS, Linux, and Windows.
 """
 
 import os
@@ -486,7 +487,7 @@ def main():
     """Main agent loop"""
     print(f"""
 {BLUE}╔══════════════════════════════════════════════════╗
-║     DGON Node Agent - MacBook with Ollama        ║
+║          DGON Node Agent - Ollama Runtime        ║
 ╚══════════════════════════════════════════════════╝{RESET}
 
 Configuration:

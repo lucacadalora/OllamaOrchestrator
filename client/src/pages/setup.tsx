@@ -73,17 +73,9 @@ bash -c '
 `.trim() : "";
 
   const getWindowsScript = () => registrationData ? `
-REM Copy and paste these commands into Command Prompt:
+REM Copy and paste this command into Command Prompt:
 
-set DGON_API=${window.location.origin}/api
-set NODE_ID=${registrationData.nodeId}
-set REGION=${region}
-set NODE_TOKEN=${registrationData.nodeToken}
-
-echo Downloading DGON agent...
-curl -o agent_mac_dev.py ${window.location.origin}/agent_mac_dev.py
-echo Starting DGON node agent...
-python agent_mac_dev.py
+set DGON_API=${window.location.origin}/api && set NODE_ID=${registrationData.nodeId} && set REGION=${region} && set NODE_TOKEN=${registrationData.nodeToken} && curl -o agent_mac_dev.py ${window.location.origin}/agent_mac_dev.py && python agent_mac_dev.py
 `.trim() : "";
 
   const agentScript = selectedOS === "windows" ? getWindowsScript() : getMacLinuxScript();

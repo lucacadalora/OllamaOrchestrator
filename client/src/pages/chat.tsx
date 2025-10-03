@@ -35,6 +35,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [httpStreamingMessageId, setHttpStreamingMessageId] = useState<string | null>(null);
   const { toast } = useToast();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastAssistantMessageIdRef = useRef<string | null>(null);
@@ -65,6 +66,9 @@ export default function Chat() {
     const maxAttempts = 600; // 5 minutes (600 * 500ms)
     let attempts = 0;
     
+    // Set streaming state for HTTP
+    setHttpStreamingMessageId(messageId);
+    
     while (attempts < maxAttempts) {
       try {
         const response = await fetch(`/api/v1/inference/status/${requestId}`);
@@ -80,6 +84,9 @@ export default function Chat() {
         }
         
         if (data.done) {
+          // Clear streaming state
+          setHttpStreamingMessageId(null);
+          
           if (data.error) {
             toast({
               title: "Inference Error",
@@ -95,6 +102,7 @@ export default function Chat() {
         attempts++;
       } catch (error) {
         console.error("Polling error:", error);
+        setHttpStreamingMessageId(null);
         break;
       }
     }
@@ -334,8 +342,8 @@ export default function Chat() {
                     ) : (
                       <StreamingMessage 
                         content={message.content} 
-                        isStreaming={isStreaming && message.id === lastAssistantMessageIdRef.current}
-                        isWaitingForResponse={!message.content && message.id === lastAssistantMessageIdRef.current}
+                        isStreaming={(isStreaming && message.id === lastAssistantMessageIdRef.current) || (message.id === httpStreamingMessageId)}
+                        isWaitingForResponse={!message.content && (message.id === lastAssistantMessageIdRef.current || message.id === httpStreamingMessageId)}
                         className="text-sm" 
                       />
                     )}

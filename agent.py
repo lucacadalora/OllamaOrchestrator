@@ -310,12 +310,47 @@ def submit_inference_chunk(token, request_id, chunk, done=False):
                 error_data = json.loads(e.read().decode())
                 expected_offset = error_data.get('expected', 0)
                 
-                # Recompute delta if we're out of sync
-                # Since we already sent the chunk, we can't recover it
-                # Log the error and update our offset
-                log(f"⚠ Offset mismatch - expected: {expected_offset}, had: {offset}", YELLOW)
+                log(f"⚠ Offset mismatch - expected: {expected_offset}, had: {offset}. Retrying...", YELLOW)
+                
+                # Update our offset to match server
                 request_offsets[request_id] = expected_offset
-                return  # Skip this chunk, continue with next
+                
+                # Retry with the same delta but corrected offset
+                # The delta is still valid, we just need to send it with the right offset
+                retry_data = {
+                    "id": request_id,
+                    "seq": seq,
+                    "offset": expected_offset,
+                    "delta": chunk,
+                    "done": done
+                }
+                
+                retry_body = json.dumps(retry_data).encode('utf-8')
+                retry_timestamp = str(int(time.time()))
+                retry_signature = calculate_hmac(token, retry_body, retry_timestamp)
+                
+                retry_req = Request(
+                    f"{API_BASE}/v1/inference/stream",
+                    data=retry_body,
+                    headers={
+                        'Content-Type': 'application/json',
+                        'X-Node-Id': NODE_ID,
+                        'X-Node-Ts': retry_timestamp,
+                        'X-Node-Auth': retry_signature
+                    },
+                    method='POST'
+                )
+                
+                # Retry with corrected offset
+                with urlopen(retry_req, timeout=10) as retry_response:
+                    retry_result = json.loads(retry_response.read().decode())
+                    if retry_result.get('ok'):
+                        request_offsets[request_id] = retry_result.get('offset', expected_offset + len(chunk))
+                        request_sequences[request_id] = seq + 1
+                        if done:
+                            del request_offsets[request_id]
+                            del request_sequences[request_id]
+                return  # Successfully retried
             else:
                 retry_count += 1
                 if retry_count >= max_retries:

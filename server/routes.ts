@@ -1246,17 +1246,16 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     
     // Frontend connection with job subscription (new delta mode)
     if (jobId) {
-      const jobState = jobStates.get(jobId);
+      let jobState = jobStates.get(jobId);
       if (!jobState) {
         // Create new job state if it doesn't exist
-        const newJobState = {
+        jobState = {
           committedOffset: 0,
           transcript: "",
           seenSeq: new Set<number>(),
           clients: new Set<WebSocket>()
         };
-        jobStates.set(jobId, newJobState);
-        jobState = newJobState;
+        jobStates.set(jobId, jobState);
       }
       
       // Add this client to the job's subscriber list

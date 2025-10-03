@@ -207,7 +207,9 @@ def poll_for_inference_requests(token):
                 
                 try:
                     full_response = ""
-                    chunk_buffer = []  # Buffer chunks to reduce HTTP calls
+                    full_reasoning = ""
+                    response_buffer = []
+                    reasoning_buffer = []
                     buffer_size = 25  # Buffer more tokens for phrase-based streaming like ChatGPT
                     last_flush_time = time.time()
                     
@@ -216,27 +218,45 @@ def poll_for_inference_requests(token):
                         for line in ollama_response:
                             if line:
                                 chunk = json.loads(line.decode())
-                                text_chunk = chunk.get("response", "")
-                                full_response += text_chunk
-                                chunk_buffer.append(text_chunk)
+                                
+                                # Handle reasoning models (dual stream)
+                                reasoning_chunk = chunk.get("reasoning", "")
+                                response_chunk = chunk.get("response", "")
+                                
+                                if reasoning_chunk:
+                                    full_reasoning += reasoning_chunk
+                                    reasoning_buffer.append(reasoning_chunk)
+                                
+                                if response_chunk:
+                                    full_response += response_chunk
+                                    response_buffer.append(response_chunk)
                                 
                                 # Send chunks in batches with time-based flush
                                 current_time = time.time()
                                 should_flush = (
-                                    len(chunk_buffer) >= buffer_size or  # Buffer full
+                                    len(response_buffer) >= buffer_size or
+                                    len(reasoning_buffer) >= buffer_size or
                                     chunk.get("done", False) or  # Stream complete
-                                    (current_time - last_flush_time > 0.5 and chunk_buffer)  # 500ms timeout
+                                    (current_time - last_flush_time > 0.5 and (response_buffer or reasoning_buffer))
                                 )
                                 
                                 if should_flush:
-                                    combined_chunk = "".join(chunk_buffer)
-                                    if combined_chunk:  # Only send if we have content
-                                        submit_inference_chunk(token, request_id, combined_chunk, chunk.get("done", False))
-                                    chunk_buffer = []
+                                    # Send reasoning chunk if we have one
+                                    if reasoning_buffer:
+                                        combined_reasoning = "".join(reasoning_buffer)
+                                        submit_inference_chunk(token, request_id, combined_reasoning, chunk.get("done", False), content_type="reasoning")
+                                        reasoning_buffer = []
+                                    
+                                    # Send response chunk if we have one
+                                    if response_buffer:
+                                        combined_response = "".join(response_buffer)
+                                        submit_inference_chunk(token, request_id, combined_response, chunk.get("done", False), content_type="response")
+                                        response_buffer = []
+                                    
                                     last_flush_time = current_time
                         
                         # Send final complete response
-                        submit_inference_response(token, request_id, full_response)
+                        submit_inference_response(token, request_id, full_response, reasoning=full_reasoning)
                         log(f"✓ Inference completed for model {model}", GREEN)
                         
                 except Exception as e:
@@ -255,7 +275,7 @@ def poll_for_inference_requests(token):
 request_offsets = {}
 request_sequences = {}
 
-def submit_inference_chunk(token, request_id, chunk, done=False):
+def submit_inference_chunk(token, request_id, chunk, done=False, content_type="response"):
     """Submit a streaming chunk back to console with offset tracking"""
     global request_offsets, request_sequences
     
@@ -273,7 +293,8 @@ def submit_inference_chunk(token, request_id, chunk, done=False):
         "seq": seq,
         "offset": offset,
         "delta": chunk,  # This is already a delta from Ollama
-        "done": done
+        "done": done,
+        "contentType": content_type  # "reasoning" or "response"
     }
     
     body = json.dumps(data).encode('utf-8')
@@ -329,7 +350,8 @@ def submit_inference_chunk(token, request_id, chunk, done=False):
                     "seq": seq,
                     "offset": expected_offset,
                     "delta": chunk,
-                    "done": done
+                    "done": done,
+                    "contentType": content_type
                 }
                 
                 retry_body = json.dumps(retry_data).encode('utf-8')
@@ -369,12 +391,13 @@ def submit_inference_chunk(token, request_id, chunk, done=False):
                 log(f"✗ Chunk submission error: {e}", RED)
             time.sleep(0.1 * retry_count)
 
-def submit_inference_response(token, request_id, response, error=None):
+def submit_inference_response(token, request_id, response, error=None, reasoning=None):
     """Submit inference response back to console"""
     data = {
         "id": request_id,
         "status": "completed" if response else "failed",
         "response": response,
+        "reasoning": reasoning,
         "error": error
     }
     
@@ -486,35 +509,63 @@ def handle_websocket_inference(token, message, ws=None):
         )
         
         full_response = ""
+        full_reasoning = ""
         
         with urlopen(ollama_req, timeout=300) as ollama_response:
             # Stream directly - send via WebSocket if available, otherwise HTTP
             for line in ollama_response:
                 if line:
                     chunk = json.loads(line.decode())
-                    text_chunk = chunk.get("response", "")
-                    full_response += text_chunk
+                    
+                    # Handle reasoning models (dual stream)
+                    reasoning_chunk = chunk.get("reasoning", "")
+                    response_chunk = chunk.get("response", "")
                     done = chunk.get("done", False)
                     
-                    # Send each chunk immediately
-                    if text_chunk:
+                    if reasoning_chunk:
+                        full_reasoning += reasoning_chunk
+                        
+                    if response_chunk:
+                        full_response += response_chunk
+                    
+                    # Send reasoning chunk immediately
+                    if reasoning_chunk:
                         if ws:
                             # Send via WebSocket (ordered, synchronous)
                             try:
                                 ws.send(json.dumps({
                                     "type": "stream_chunk",
                                     "requestId": request_id,
-                                    "chunk": text_chunk,
+                                    "chunk": reasoning_chunk,
+                                    "contentType": "reasoning",
                                     "done": done
                                 }))
                             except Exception as e:
                                 log(f"✗ WebSocket send error: {e}", RED)
                         else:
                             # Fallback to HTTP (may arrive out of order)
-                            submit_inference_chunk(token, request_id, text_chunk, done)
+                            submit_inference_chunk(token, request_id, reasoning_chunk, done, content_type="reasoning")
+                    
+                    # Send response chunk immediately
+                    if response_chunk:
+                        if ws:
+                            # Send via WebSocket (ordered, synchronous)
+                            try:
+                                ws.send(json.dumps({
+                                    "type": "stream_chunk",
+                                    "requestId": request_id,
+                                    "chunk": response_chunk,
+                                    "contentType": "response",
+                                    "done": done
+                                }))
+                            except Exception as e:
+                                log(f"✗ WebSocket send error: {e}", RED)
+                        else:
+                            # Fallback to HTTP (may arrive out of order)
+                            submit_inference_chunk(token, request_id, response_chunk, done, content_type="response")
         
         # Send completion
-        submit_inference_response(token, request_id, full_response)
+        submit_inference_response(token, request_id, full_response, reasoning=full_reasoning)
         log(f"✓ WebSocket inference completed", GREEN)
         
     except Exception as e:

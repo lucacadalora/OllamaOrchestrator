@@ -2,6 +2,7 @@ import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useAuth } from "@/lib/auth";
+import { useState } from "react";
 import { 
   Network, 
   BarChart3, 
@@ -13,7 +14,9 @@ import {
   RotateCw,
   LogOut,
   User,
-  ShieldCheck
+  ShieldCheck,
+  Menu,
+  X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -31,11 +34,37 @@ export default function Sidebar() {
   const [location] = useLocation();
   const { lastUpdate, isRefreshing } = useRealtime();
   const { user, logout } = useAuth();
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const secondsAgo = Math.floor((Date.now() - lastUpdate.getTime()) / 1000);
 
   return (
-    <aside className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col" data-testid="sidebar">
+    <>
+      {/* Mobile menu button */}
+      <div className="lg:hidden fixed top-4 left-4 z-50">
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+          className="bg-background border-border"
+        >
+          {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+        </Button>
+      </div>
+
+      {/* Mobile overlay */}
+      {isMobileMenuOpen && (
+        <div
+          className="lg:hidden fixed inset-0 bg-black/50 z-40"
+          onClick={() => setIsMobileMenuOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside className={cn(
+        "w-64 bg-sidebar border-r border-sidebar-border flex flex-col fixed lg:relative h-full z-40 transition-transform duration-300",
+        isMobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+      )} data-testid="sidebar">
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center space-x-3">
           <div className="w-8 h-8 bg-sidebar-primary rounded-lg flex items-center justify-center">
@@ -65,6 +94,7 @@ export default function Sidebar() {
                         : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                     )}
                     data-testid={`nav-${item.name.toLowerCase().replace(/\s+/g, '-')}`}
+                    onClick={() => setIsMobileMenuOpen(false)}
                   >
                     <Icon className="w-4 h-4" />
                     <span>{item.name}</span>
@@ -112,5 +142,6 @@ export default function Sidebar() {
         )}
       </div>
     </aside>
+    </>
   );
 }

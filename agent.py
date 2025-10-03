@@ -352,7 +352,7 @@ def send_test_receipt(token):
     except Exception as e:
         log(f"✗ Receipt failed: {e}", RED)
 
-def handle_websocket_inference(token, message):
+def handle_websocket_inference(token, message, ws=None):
     """Handle inference request received via WebSocket"""
     try:
         request_id = message.get('id')
@@ -392,7 +392,7 @@ def handle_websocket_inference(token, message):
         full_response = ""
         
         with urlopen(ollama_req, timeout=300) as ollama_response:
-            # Stream directly - no buffering!
+            # Stream directly - send via WebSocket if available, otherwise HTTP
             for line in ollama_response:
                 if line:
                     chunk = json.loads(line.decode())
@@ -400,9 +400,22 @@ def handle_websocket_inference(token, message):
                     full_response += text_chunk
                     done = chunk.get("done", False)
                     
-                    # Send each chunk immediately (no batching)
+                    # Send each chunk immediately
                     if text_chunk:
-                        submit_inference_chunk(token, request_id, text_chunk, done)
+                        if ws:
+                            # Send via WebSocket (ordered, synchronous)
+                            try:
+                                ws.send(json.dumps({
+                                    "type": "stream_chunk",
+                                    "requestId": request_id,
+                                    "chunk": text_chunk,
+                                    "done": done
+                                }))
+                            except Exception as e:
+                                log(f"✗ WebSocket send error: {e}", RED)
+                        else:
+                            # Fallback to HTTP (may arrive out of order)
+                            submit_inference_chunk(token, request_id, text_chunk, done)
         
         # Send completion
         submit_inference_response(token, request_id, full_response)
@@ -434,7 +447,7 @@ def run_websocket_mode(token):
                 # Handle inference in background thread to not block WebSocket
                 thread = threading.Thread(
                     target=handle_websocket_inference,
-                    args=(token, data),
+                    args=(token, data, ws),
                     daemon=True
                 )
                 thread.start()

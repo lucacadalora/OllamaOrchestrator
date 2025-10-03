@@ -197,4 +197,56 @@
   .bg-primary .prose a {
     @apply text-primary-foreground underline;
   }
+
+  /* Typing indicator animation */
+  @keyframes typing-pulse {
+    0%, 60%, 100% {
+      opacity: 0.4;
+      transform: scale(0.8);
+    }
+    30% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  .typing-dot {
+    @apply text-muted-foreground inline-block;
+    animation: typing-pulse 1.5s infinite;
+    font-size: 0.875rem;
+  }
+
+  /* Streaming cursor animation */
+  @keyframes cursor-blink {
+    0%, 49% {
+      opacity: 1;
+    }
+    50%, 100% {
+      opacity: 0;
+    }
+  }
+
+  .streaming-cursor {
+    @apply inline-block w-0.5 h-4 bg-current ml-0.5 align-text-bottom;
+    animation: cursor-blink 1s infinite;
+  }
+
+  /* Smooth text animation */
+  @keyframes text-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .streaming-text {
+    animation: text-fade-in 0.3s ease-out;
+  }
+
+  /* Smooth scroll behavior */
+  .smooth-scroll {
+    scroll-behavior: smooth;
+  }
 }

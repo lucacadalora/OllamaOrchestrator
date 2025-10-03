@@ -1,0 +1,244 @@
+Streaming Contract v2 (authoritative, unambiguous)
+Canonical Terms
+
+Transcript: authoritative full text stored by the server per jobId.
+
+Delta: only the new text since the last committed offset.
+
+Offset: number of UTF-8 codepoints (or bytes—pick one and be consistent) already committed.
+
+Seq: strictly increasing uint64 sent by the agent; used for de-dup/ordering.
+
+Done: boolean end-of-stream flag.
+
+Agent → Server (single source of truth)
+
+Endpoint: POST /api/v1/inference/stream
+Body (JSON):
+
+{
+  "jobId": "xxx",
+  "seq": 17,
+  "offset": 1532,
+  "delta": " the new tokens only",
+  "done": false,
+  "ts": 1738538455123
+}
+
+
+Rules
+
+offset = committed length on server the agent believes before applying delta.
+
+Server must reject if offset ≠ server’s committed_offset (409 + expected offset) → agent re-sends correct delta.
+
+Server appends delta, updates committed_offset += len(delta), stores (jobId, seq) as seen, and broadcasts delta to subscribers.
+
+done=true only on the last frame.
+
+If you cannot change the agent immediately, the server can compute delta from a cumulative by slicing: delta = cumulative[server_offset:] and ignoring earlier content.
+
+Server → Client (two modes with identical semantics)
+A) WebSocket frames (preferred)
+
+WS URL: ws://.../api/ws?jobId=xxx&since=1532
+Server frame:
+
+{ "jobId":"xxx", "offset":1532, "delta":"...", "done":false }
+
+
+Server keeps a per-connection cursor initialized from since (default 0).
+
+Always sends delta only; offset is pre-delta.
+
+On reconnect, client passes the last committed offset it rendered.
+
+B) HTTP Polling (exactly the same delta contract)
+
+GET /api/v1/inference/poll?jobId=xxx&since=1532 →
+
+{ "jobId":"xxx", "offset":1532, "delta":"...", "done":false }
+
+
+If no new data, return {delta:"", done:false} or 204 No Content.
+
+Client applies deltas exactly the same way as WS.
+
+Optional upgrade: SSE (text/event-stream) at /api/v1/inference/events?jobId&since.
+
+Minimal Server Patch (TypeScript/Node)
+State
+type JobState = {
+  committedOffset: number;   // authoritative
+  transcript: string;        // authoritative
+  seenSeq: Set<number>;      // dedup
+  clients: Set<WebSocket>;   // WS subscribers
+};
+const jobs = new Map<string, JobState>();
+
+Agent ingestion (fix the bug)
+app.post('/api/v1/inference/stream', jsonParser, (req, res) => {
+  const { jobId, seq, offset, delta, done } = req.body;
+  const st = jobs.get(jobId) ?? { committedOffset:0, transcript:"", seenSeq:new Set(), clients:new Set() };
+  jobs.set(jobId, st);
+
+  // idempotency
+  if (st.seenSeq.has(seq)) return res.status(200).json({ ok:true, offset: st.committedOffset });
+
+  // if agent still sends cumulative: uncomment to compute delta
+  // const incoming = req.body.cumulative as string;
+  // const delta = incoming.slice(st.committedOffset);
+
+  if (offset !== st.committedOffset) {
+    return res.status(409).json({ error:"offset_mismatch", expected: st.committedOffset });
+  }
+
+  st.transcript += delta;
+  st.committedOffset += [...delta].length; // if codepoints; else Buffer.byteLength(delta,'utf8')
+  st.seenSeq.add(seq);
+
+  // fan-out as deltas (NOT cumulative)
+  const frame = JSON.stringify({ jobId, offset, delta, done: !!done });
+  st.clients.forEach(ws => ws.readyState===1 && ws.send(frame));
+
+  res.json({ ok:true, offset: st.committedOffset });
+});
+
+WebSocket (cursor per connection)
+wss.on('connection', (ws, req) => {
+  const { jobId, since } = parseQuery(req.url);
+  const st = jobs.get(jobId) ?? { committedOffset:0, transcript:"", seenSeq:new Set(), clients:new Set() };
+  jobs.set(jobId, st);
+  st.clients.add(ws);
+
+  let cursor = Number(since ?? 0);
+  // If client is behind, serve the backlog once as a delta
+  if (cursor < st.committedOffset) {
+    const backlog = sliceByOffset(st.transcript, cursor, st.committedOffset);
+    ws.send(JSON.stringify({ jobId, offset: cursor, delta: backlog, done:false }));
+    cursor = st.committedOffset;
+  }
+
+  ws.on('close', () => st.clients.delete(ws));
+});
+
+HTTP polling (same delta)
+app.get('/api/v1/inference/poll', (req, res) => {
+  const jobId = req.query.jobId as string;
+  const since = Number(req.query.since || 0);
+  const st = jobs.get(jobId);
+  if (!st) return res.status(404).json({ error:'unknown_job' });
+
+  if (since >= st.committedOffset) return res.status(204).end();
+  const delta = sliceByOffset(st.transcript, since, st.committedOffset);
+  res.json({ jobId, offset: since, delta, done:false });
+});
+
+Helpers (choose codepoint or byte offsets and stick to it!)
+function sliceByOffset(transcript: string, from: number, to: number) {
+  // codepoint-safe
+  const arr = [...transcript];
+  return arr.slice(from, to).join('');
+}
+
+Agent Patch (Python)
+
+Send deltas with seq + offset; retry on 409 with corrected offset.
+
+seq = 0
+offset = 0
+buf = []
+
+def flush_delta():
+    global seq, offset
+    if not buf: return
+    delta = "".join(buf); buf.clear()
+    payload = {"jobId": job_id, "seq": seq, "offset": offset, "delta": delta, "done": False}
+    while True:
+        r = session.post(API + "/api/v1/inference/stream", json=payload, timeout=10)
+        if r.status_code == 409:
+            expected = r.json()["expected"]
+            # recompute delta against expected (if we somehow desynced)
+            already = offset
+            delta = delta[(expected - already):]
+            offset = expected
+            payload["offset"] = offset
+            payload["delta"]  = delta
+            continue
+        r.raise_for_status()
+        offset = r.json()["offset"]
+        seq += 1
+        break
+
+# While reading Ollama stream:
+#   for each token t: buf.append(t)
+#   flush every ~25 tokens or 250ms
+
+
+If you must keep “cumulative from Ollama”, compute the delta in the agent: delta = cumulative[offset:].
+
+Frontend Patch (React)
+
+Never concatenate raw server payloads. Maintain an authoritative cursor:
+
+const [text, setText] = useState('');
+const [offset, setOffset] = useState(0);
+
+function applyDelta(frame: {offset:number, delta:string, done:boolean}) {
+  // ignore stale/out-of-order frames
+  if (frame.offset !== offset) return;
+  setText(prev => prev + frame.delta);
+  setOffset(offset + [...frame.delta].length); // or byte length
+}
+
+// WS path
+ws.onmessage = (ev) => applyDelta(JSON.parse(ev.data));
+
+// Polling fallback
+async function poll() {
+  const r = await fetch(`/api/v1/inference/poll?jobId=${jobId}&since=${offset}`);
+  if (r.status === 204) return;
+  const f = await r.json();
+  applyDelta(f);
+}
+
+
+Reconnect logic: on reconnect, open WS with ?since=${offset} so the server can send any backlog as a single delta.
+
+Remove the Multi-buffer Jitter
+
+Agent flush: 25 tokens or 250 ms (not 500 ms), whichever first.
+
+Server: no extra buffering; fan-out immediately.
+
+Frontend debounce: remove; rendering is cheap compared to network waits.
+
+Backpressure, Ordering, Idempotency (quick guards)
+
+Backpressure: if server queue grows, reply 429 to /stream; agent waits 50–100 ms and retries (same seq/offset/delta).
+
+Ordering: server drops any frame with seq ≤ max_seen_seq[jobId].
+
+Idempotency: storing (jobId, seq) prevents duplicates on agent retries.
+
+Quick Tests (you can run today)
+
+Happy path: agent sends 4 deltas → server broadcasts 4 deltas → WS client renders text with no duplicates; HTTP poll from offset verifies identical transcript.
+
+WS drop mid-stream: client reconnects with since=offset; server sends backlog delta once; stream continues with no duplication.
+
+Agent desync: server replies 409 (expected offset); agent recomputes delta and re-sends; no duplication.
+
+Mixed paths: start on WS, switch to HTTP poll; both use since=offset → identical result.
+
+Why this fixes your current breakage
+
+Single canonical truth = server transcript + committed_offset.
+
+Everything is delta-based to the client, regardless of WS or HTTP.
+
+Offsets/seq give you ordering and idempotency; 409 resolves drift cleanly.
+
+You can still accept cumulative from legacy agents by slicing server-side, but all outward fan-out is delta.
+
+If you share a snippet of your current server framework (Express/FastAPI) I can adapt the exact patch to your codebase line-by-line.

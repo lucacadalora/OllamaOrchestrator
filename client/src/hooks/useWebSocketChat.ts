@@ -15,6 +15,7 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
   const onStreamCompleteRef = useRef(onStreamComplete);
+  const updateTimeoutRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
     onStreamCompleteRef.current = onStreamComplete;
@@ -41,24 +42,32 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
         const data = JSON.parse(event.data);
 
         if (data.type === "chunk" || data.type === "stream_chunk") {
-          setCurrentResponse(prev => {
-            // Ensure we're always appending to the latest state
-            const newContent = prev + (data.chunk || '');
-            
-            if (data.done) {
-              setIsStreaming(false);
-              // Small delay to ensure final state is set
-              setTimeout(() => {
-                if (onStreamCompleteRef.current) {
-                  onStreamCompleteRef.current(newContent);
-                }
-              }, 50);
+          // Clear any existing debounce timer
+          if (updateTimeoutRef.current) {
+            clearTimeout(updateTimeoutRef.current);
+          }
+          
+          // Debounce updates for smoother rendering with larger chunks
+          updateTimeoutRef.current = setTimeout(() => {
+            setCurrentResponse(prev => {
+              // Ensure we're always appending to the latest state
+              const newContent = prev + (data.chunk || '');
+              
+              if (data.done) {
+                setIsStreaming(false);
+                // Small delay to ensure final state is set
+                setTimeout(() => {
+                  if (onStreamCompleteRef.current) {
+                    onStreamCompleteRef.current(newContent);
+                  }
+                }, 50);
+                return newContent;
+              }
+              
+              setIsStreaming(true);
               return newContent;
-            }
-            
-            setIsStreaming(true);
-            return newContent;
-          });
+            });
+          }, 30); // 30ms debounce for smooth updates
         } else if (data.type === "request_created") {
           console.log("Request created:", data.requestId);
         } else if (data.type === "error") {

@@ -10,6 +10,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useWebSocketChat } from "@/hooks/useWebSocketChat";
 import { MessageContent } from "@/components/MessageContent";
+import { StreamingMessage } from "@/components/StreamingMessage";
+import { TypingIndicator } from "@/components/TypingIndicator";
 
 interface Message {
   id: string;
@@ -322,7 +324,12 @@ export default function Chat() {
                     {message.role === "user" ? (
                       <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                     ) : (
-                      <MessageContent content={message.content} className="text-sm" />
+                      <StreamingMessage 
+                        content={message.content} 
+                        isStreaming={isStreaming && message.id === lastAssistantMessageIdRef.current}
+                        isWaitingForResponse={!message.content && message.id === lastAssistantMessageIdRef.current}
+                        className="text-sm" 
+                      />
                     )}
                     {message.nodeId && (
                       <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/20">

@@ -12,10 +12,12 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
   const [isConnected, setIsConnected] = useState(false);
   const [currentResponse, setCurrentResponse] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [offset, setOffset] = useState(0); // Track cursor position
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
   const onStreamCompleteRef = useRef(onStreamComplete);
   const updateTimeoutRef = useRef<NodeJS.Timeout>();
+  const offsetRef = useRef(0); // Ref for immediate access
 
   useEffect(() => {
     onStreamCompleteRef.current = onStreamComplete;
@@ -41,7 +43,30 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
       try {
         const data = JSON.parse(event.data);
 
-        if (data.type === "chunk" || data.type === "stream_chunk") {
+        // Handle delta-based streaming (new contract)
+        if (data.delta !== undefined) {
+          // Only apply delta if offset matches
+          if (data.offset === offsetRef.current) {
+            setCurrentResponse(prev => prev + data.delta);
+            const newOffset = offsetRef.current + [...data.delta].length;
+            setOffset(newOffset);
+            offsetRef.current = newOffset;
+            
+            if (data.done) {
+              setIsStreaming(false);
+              setTimeout(() => {
+                if (onStreamCompleteRef.current) {
+                  onStreamCompleteRef.current(currentResponse);
+                }
+              }, 50);
+            } else {
+              setIsStreaming(true);
+            }
+          }
+          // Ignore out-of-order deltas
+        } 
+        // Legacy chunk handling (backwards compatibility)
+        else if (data.type === "chunk" || data.type === "stream_chunk") {
           // Clear any existing debounce timer
           if (updateTimeoutRef.current) {
             clearTimeout(updateTimeoutRef.current);
@@ -104,6 +129,8 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
 
     setIsStreaming(true);
     setCurrentResponse("");
+    setOffset(0);  // Reset offset for new message
+    offsetRef.current = 0;
 
     wsRef.current.send(JSON.stringify({
       type: "inference_request",

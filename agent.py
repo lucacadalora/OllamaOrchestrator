@@ -201,7 +201,8 @@ def poll_for_inference_requests(token):
                 try:
                     full_response = ""
                     chunk_buffer = []  # Buffer chunks to reduce HTTP calls
-                    buffer_size = 5  # Buffer 5 tokens for smooth streaming without overwhelming React
+                    buffer_size = 25  # Buffer more tokens for phrase-based streaming like ChatGPT
+                    last_flush_time = time.time()
                     
                     with urlopen(ollama_req, timeout=300) as ollama_response:
                         # Stream tokens from Ollama
@@ -212,12 +213,20 @@ def poll_for_inference_requests(token):
                                 full_response += text_chunk
                                 chunk_buffer.append(text_chunk)
                                 
-                                # Send chunks in batches to reduce HTTP overhead
-                                if len(chunk_buffer) >= buffer_size or chunk.get("done", False):
+                                # Send chunks in batches with time-based flush
+                                current_time = time.time()
+                                should_flush = (
+                                    len(chunk_buffer) >= buffer_size or  # Buffer full
+                                    chunk.get("done", False) or  # Stream complete
+                                    (current_time - last_flush_time > 0.5 and chunk_buffer)  # 500ms timeout
+                                )
+                                
+                                if should_flush:
                                     combined_chunk = "".join(chunk_buffer)
                                     if combined_chunk:  # Only send if we have content
                                         submit_inference_chunk(token, request_id, combined_chunk, chunk.get("done", False))
                                     chunk_buffer = []
+                                    last_flush_time = current_time
                         
                         # Send final complete response
                         submit_inference_response(token, request_id, full_response)

@@ -75,7 +75,7 @@ bash -c '
   const getWindowsScript = () => registrationData ? `
 # Copy and paste this into PowerShell (recommended for Windows):
 
-Set-Location $env:USERPROFILE; $env:DGON_API="${window.location.origin}/api"; $env:NODE_ID="${registrationData.nodeId}"; $env:REGION="${region}"; $env:NODE_TOKEN="${registrationData.nodeToken}"; Invoke-WebRequest -Uri "${window.location.origin}/agent.py" -OutFile "agent.py"; python -u agent.py
+Set-Location $env:USERPROFILE; $env:PYTHONUNBUFFERED="1"; $env:DGON_API="${window.location.origin}/api"; $env:NODE_ID="${registrationData.nodeId}"; $env:REGION="${region}"; $env:NODE_TOKEN="${registrationData.nodeToken}"; Invoke-WebRequest -Uri "${window.location.origin}/agent.py" -OutFile "agent.py"; python -u agent.py
 `.trim() : "";
 
   const agentScript = selectedOS === "windows" ? getWindowsScript() : getMacLinuxScript();

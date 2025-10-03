@@ -38,7 +38,7 @@ RESET = "\033[0m"
 def log(message, color=""):
     """Print colored log message with timestamp"""
     timestamp = time.strftime("%H:%M:%S")
-    print(f"{color}[{timestamp}] {message}{RESET}")
+    print(f"{color}[{timestamp}] {message}{RESET}", flush=True)
 
 def calculate_hmac(secret, body, timestamp):
     """Calculate HMAC-SHA256 signature for request authentication"""
@@ -61,6 +61,7 @@ def check_ollama_ready():
 def register_node():
     """Register this node with the DGON network"""
     log(f"Registering node: {NODE_ID}", BLUE)
+    log(f"Connecting to: {API_BASE}/v1/nodes/self-register", BLUE)
     
     data = {
         "id": NODE_ID,
@@ -80,6 +81,7 @@ def register_node():
     )
     
     try:
+        log(f"Sending registration request...", BLUE)
         with urlopen(req, timeout=10) as response:
             result = json.loads(response.read().decode())
             token = result.get("token") or result.get("nodeToken")
@@ -95,8 +97,13 @@ def register_node():
         log(f"✗ Registration failed: {error_msg}", RED)
         sys.exit(1)
     except URLError as e:
-        log(f"✗ Cannot connect to API: {e.reason}", RED)
+        log(f"✗ Cannot connect to API: {str(e.reason)}", RED)
         log(f"  Make sure the DGON Console is running at: {API_BASE}", YELLOW)
+        log(f"  Check your network connection and firewall settings", YELLOW)
+        sys.exit(1)
+    except Exception as e:
+        log(f"✗ Unexpected error during registration: {str(e)}", RED)
+        log(f"  Error type: {type(e).__name__}", YELLOW)
         sys.exit(1)
 
 def send_heartbeat(token, ready, model_count=0, model_names=None):
@@ -598,7 +605,7 @@ Configuration:
   Region:    {REGION}
   Runtime:   {RUNTIME}
 
-""")
+""", flush=True)
     
     # Register or use existing token
     if NODE_TOKEN:
@@ -676,4 +683,7 @@ Configuration:
         sys.exit(0)
 
 if __name__ == "__main__":
+    # Immediate startup confirmation for Windows compatibility
+    print("DGON Agent starting...", flush=True)
+    sys.stdout.flush()
     main()

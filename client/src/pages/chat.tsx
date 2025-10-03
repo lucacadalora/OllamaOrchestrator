@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +35,20 @@ export default function Chat() {
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const { toast } = useToast();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const { isConnected, sendMessage: sendWebSocketMessage, currentResponse, isStreaming } = useWebSocketChat();
+  const lastAssistantMessageIdRef = useRef<string | null>(null);
+
+  const handleStreamComplete = useCallback((finalContent: string) => {
+    if (lastAssistantMessageIdRef.current) {
+      setMessages(prev => prev.map(msg =>
+        msg.id === lastAssistantMessageIdRef.current
+          ? { ...msg, content: finalContent }
+          : msg
+      ));
+      lastAssistantMessageIdRef.current = null;
+    }
+  }, []);
+
+  const { isConnected, sendMessage: sendWebSocketMessage, currentResponse, isStreaming } = useWebSocketChat(handleStreamComplete);
 
   // Fetch available models
   const { data: modelsData, isLoading: loadingModels } = useQuery<ModelsResponse>({
@@ -149,6 +162,7 @@ export default function Chat() {
     } else {
       // Add placeholder for WebSocket streaming
       const assistantMessageId = `msg-${Date.now()}-assistant`;
+      lastAssistantMessageIdRef.current = assistantMessageId;
       const assistantMessage: Message = {
         id: assistantMessageId,
         role: "assistant",

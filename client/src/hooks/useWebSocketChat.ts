@@ -8,12 +8,17 @@ interface Message {
   nodeId?: string;
 }
 
-export function useWebSocketChat() {
+export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
   const [isConnected, setIsConnected] = useState(false);
   const [currentResponse, setCurrentResponse] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
+  const onStreamCompleteRef = useRef(onStreamComplete);
+
+  useEffect(() => {
+    onStreamCompleteRef.current = onStreamComplete;
+  }, [onStreamComplete]);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -36,14 +41,21 @@ export function useWebSocketChat() {
         const data = JSON.parse(event.data);
 
         if (data.type === "chunk" || data.type === "stream_chunk") {
-          // Append chunk to current response
-          setCurrentResponse(prev => prev + data.chunk);
-          setIsStreaming(!data.done);
-          
-          if (data.done) {
-            setCurrentResponse("");
-            setIsStreaming(false);
-          }
+          setCurrentResponse(prev => {
+            const newContent = prev + data.chunk;
+            
+            if (data.done) {
+              if (onStreamCompleteRef.current) {
+                onStreamCompleteRef.current(newContent);
+              }
+              setIsStreaming(false);
+              setTimeout(() => setCurrentResponse(""), 0);
+              return newContent;
+            }
+            
+            setIsStreaming(true);
+            return newContent;
+          });
         } else if (data.type === "request_created") {
           console.log("Request created:", data.requestId);
         } else if (data.type === "error") {

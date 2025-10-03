@@ -62,7 +62,7 @@ export default function Sidebar() {
 
       {/* Sidebar */}
       <aside className={cn(
-        "w-64 bg-sidebar border-r border-sidebar-border flex flex-col fixed lg:relative h-full z-40 transition-transform duration-300",
+        "w-64 bg-sidebar border-r border-sidebar-border flex flex-col fixed lg:relative h-screen lg:h-full z-40 transition-transform duration-300",
         isMobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
       )} data-testid="sidebar">
       <div className="p-6 border-b border-sidebar-border">

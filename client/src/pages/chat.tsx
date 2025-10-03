@@ -192,9 +192,9 @@ export default function Chat() {
   const models = modelsData?.models || [];
 
   return (
-    <div className="flex flex-col lg:flex-row h-screen overflow-hidden" data-testid="chat-page">
+    <div className="flex flex-col lg:flex-row h-full min-h-screen" data-testid="chat-page">
       {/* Sidebar - Model Selection */}
-      <div className="w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-border bg-card overflow-y-auto max-h-[30vh] lg:max-h-none">
+      <div className="w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-border bg-card overflow-y-auto max-h-[40vh] lg:max-h-none lg:h-full">
         <div className="p-4">
           <h3 className="text-lg font-semibold mb-4">Available Models</h3>
           

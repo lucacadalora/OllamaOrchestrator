@@ -57,7 +57,8 @@ function requireRole(...allowedRoles: string[]) {
 // Job streaming state management
 type JobState = {
   committedOffset: number;   // Authoritative offset
-  transcript: string;        // Authoritative full text
+  transcript: string;        // Authoritative full text (response)
+  reasoning: string;         // Authoritative reasoning text
   seenSeq: Set<number>;      // Dedup
   clients: Set<WebSocket>;   // WS subscribers
 };
@@ -928,8 +929,9 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     requireNodeAuth((nodeId) => storage.getNodeSecret(nodeId)),
     async (req, res) => {
       try {
-        const { id: jobId, seq, offset, delta, cumulative, done } = req.body;
+        const { id: jobId, seq, offset, delta, cumulative, done, contentType } = req.body;
         const nodeId = req.nodeId!;
+        const type = contentType || "response"; // Default to response for backwards compatibility
         
         if (!jobId) {
           return res.status(400).json({ error: "Request ID required" });
@@ -941,6 +943,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
           jobState = {
             committedOffset: 0,
             transcript: "",
+            reasoning: "",
             seenSeq: new Set(),
             clients: new Set()
           };
@@ -972,9 +975,13 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
           });
         }
         
-        // Apply delta
+        // Apply delta to appropriate field
         if (actualDelta) {
-          jobState.transcript += actualDelta;
+          if (type === "reasoning") {
+            jobState.reasoning += actualDelta;
+          } else {
+            jobState.transcript += actualDelta;
+          }
           jobState.committedOffset += [...actualDelta].length; // Codepoint-safe
         }
         
@@ -998,6 +1005,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
           jobId, 
           offset: offset ?? jobState.committedOffset - [...actualDelta].length,
           delta: actualDelta, 
+          contentType: type,
           done: !!done 
         });
         
@@ -1016,6 +1024,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
             type: "chunk",
             requestId: jobId,
             chunk: actualDelta,  // Send delta, not cumulative!
+            contentType: type,
             done
           }));
         }

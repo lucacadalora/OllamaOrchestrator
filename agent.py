@@ -201,7 +201,7 @@ def poll_for_inference_requests(token):
                 try:
                     full_response = ""
                     chunk_buffer = []  # Buffer chunks to reduce HTTP calls
-                    buffer_size = 1  # Send every chunk immediately for smoother streaming
+                    buffer_size = 5  # Buffer 5 tokens for smooth streaming without overwhelming React
                     
                     with urlopen(ollama_req, timeout=300) as ollama_response:
                         # Stream tokens from Ollama

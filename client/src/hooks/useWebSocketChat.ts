@@ -42,13 +42,17 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
 
         if (data.type === "chunk" || data.type === "stream_chunk") {
           setCurrentResponse(prev => {
-            const newContent = prev + data.chunk;
+            // Ensure we're always appending to the latest state
+            const newContent = prev + (data.chunk || '');
             
             if (data.done) {
               setIsStreaming(false);
-              if (onStreamCompleteRef.current) {
-                onStreamCompleteRef.current(newContent);
-              }
+              // Small delay to ensure final state is set
+              setTimeout(() => {
+                if (onStreamCompleteRef.current) {
+                  onStreamCompleteRef.current(newContent);
+                }
+              }, 50);
               return newContent;
             }
             

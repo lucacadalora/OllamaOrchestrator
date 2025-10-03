@@ -54,6 +54,21 @@ function requireRole(...allowedRoles: string[]) {
   };
 }
 
+// Job streaming state management
+type JobState = {
+  committedOffset: number;   // Authoritative offset
+  transcript: string;        // Authoritative full text
+  seenSeq: Set<number>;      // Dedup
+  clients: Set<WebSocket>;   // WS subscribers
+};
+const jobStates = new Map<string, JobState>();
+
+// Helper function for UTF-8 safe slicing by codepoints
+function sliceByOffset(transcript: string, from: number, to: number): string {
+  const arr = [...transcript]; // Convert to codepoints
+  return arr.slice(from, to).join('');
+}
+
 export async function registerRoutes(app: Express, sessionParser: RequestHandler): Promise<Server> {
   // Auth routes
   app.post("/api/v1/auth/register", async (req, res) => {
@@ -802,6 +817,35 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     }
   });
   
+  // HTTP polling with delta contract - same as WebSocket
+  app.get("/api/v1/inference/delta", (req, res) => {
+    const jobId = req.query.jobId as string;
+    const since = Number(req.query.since || 0);
+    
+    if (!jobId) {
+      return res.status(400).json({ error: "jobId required" });
+    }
+    
+    const jobState = jobStates.get(jobId);
+    if (!jobState) {
+      return res.status(404).json({ error: "unknown_job" });
+    }
+    
+    // If client is caught up, return 204 No Content
+    if (since >= jobState.committedOffset) {
+      return res.status(204).end();
+    }
+    
+    // Return delta from client's offset
+    const delta = sliceByOffset(jobState.transcript, since, jobState.committedOffset);
+    res.json({ 
+      jobId, 
+      offset: since, 
+      delta, 
+      done: false  // Will be set to true in a separate final frame
+    });
+  });
+  
   // Node polling endpoint - Get next inference request
   app.get(
     "/api/v1/inference/poll",
@@ -878,71 +922,132 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     }
   );
 
-  // Node streaming endpoint - Submit streaming chunks
+  // Node streaming endpoint - Submit streaming chunks with offset tracking
   app.post(
     "/api/v1/inference/stream",
     requireNodeAuth((nodeId) => storage.getNodeSecret(nodeId)),
     async (req, res) => {
       try {
-        const { id, chunk, done } = req.body;
+        const { id: jobId, seq, offset, delta, cumulative, done } = req.body;
         const nodeId = req.nodeId!;
         
-        if (!id) {
+        if (!jobId) {
           return res.status(400).json({ error: "Request ID required" });
         }
         
-        // Store chunk in request (append to existing response)
-        const request = await storage.getRequestById(id);
-        if (request) {
-          const currentResponse = request.response || "";
-          const newResponse = currentResponse + chunk;
-          await storage.updateRequestStatus(
-            id, 
-            done ? "completed" : "streaming",
-            newResponse
-          );
-          
-          // Forward chunk to the specific WebSocket connection for this request
-          const wsConnections = (app as any).wsConnections as Map<string, WebSocket>;
-          const ws = wsConnections.get(id);
-          
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: "chunk",
-              requestId: id,
-              chunk,
-              done
-            }));
-            
-            // Clean up request mapping when streaming is complete
-            if (done) {
-              wsConnections.delete(id);
-              
-              // Generate receipt when streaming is complete
-              if (request.userId) {
-                const startTime = new Date(request.createdAt!).getTime();
-                const endTime = new Date().getTime();
-                const processingTime = endTime - startTime;
-                
-                // Estimate token count (rough approximation)
-                const tokenCount = Math.ceil(newResponse.length / 4);
-                
-                await ReceiptGenerator.createReceipt(
-                  request.userId,
-                  id,
-                  nodeId,
-                  request.model,
-                  request.messages as any[],
-                  newResponse,
-                  processingTime,
-                  tokenCount
-                );
-              }
-            }
-          }
+        // Get or create job state
+        let jobState = jobStates.get(jobId);
+        if (!jobState) {
+          jobState = {
+            committedOffset: 0,
+            transcript: "",
+            seenSeq: new Set(),
+            clients: new Set()
+          };
+          jobStates.set(jobId, jobState);
         }
         
-        res.json({ success: true });
+        // Handle idempotency for sequence numbers
+        if (seq !== undefined && jobState.seenSeq.has(seq)) {
+          return res.status(200).json({ ok: true, offset: jobState.committedOffset });
+        }
+        
+        // Compute delta from cumulative if agent sends cumulative (backwards compatibility)
+        let actualDelta = delta;
+        if (!delta && cumulative) {
+          // Agent is sending cumulative text, compute the delta
+          actualDelta = cumulative.slice(jobState.committedOffset);
+        }
+        
+        // For compatibility, if neither delta nor cumulative but chunk exists
+        if (!actualDelta && req.body.chunk) {
+          actualDelta = req.body.chunk;
+        }
+        
+        // Validate offset if provided
+        if (offset !== undefined && offset !== jobState.committedOffset) {
+          return res.status(409).json({ 
+            error: "offset_mismatch", 
+            expected: jobState.committedOffset 
+          });
+        }
+        
+        // Apply delta
+        if (actualDelta) {
+          jobState.transcript += actualDelta;
+          jobState.committedOffset += [...actualDelta].length; // Codepoint-safe
+        }
+        
+        // Track sequence if provided
+        if (seq !== undefined) {
+          jobState.seenSeq.add(seq);
+        }
+        
+        // Update database with full transcript
+        const request = await storage.getRequestById(jobId);
+        if (request) {
+          await storage.updateRequestStatus(
+            jobId,
+            done ? "completed" : "streaming",
+            jobState.transcript
+          );
+        }
+        
+        // Fan-out delta to all WebSocket clients (not cumulative!)
+        const frame = JSON.stringify({ 
+          jobId, 
+          offset: offset ?? jobState.committedOffset - [...actualDelta].length,
+          delta: actualDelta, 
+          done: !!done 
+        });
+        
+        // Send to all WebSocket clients watching this job
+        jobState.clients.forEach(ws => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(frame);
+          }
+        });
+        
+        // Also send to request-specific connection for backwards compatibility
+        const requestConnections = (app as any).wsConnections as Map<string, WebSocket>;
+        const requestWs = requestConnections.get(jobId);
+        if (requestWs && requestWs.readyState === WebSocket.OPEN) {
+          requestWs.send(JSON.stringify({
+            type: "chunk",
+            requestId: jobId,
+            chunk: actualDelta,  // Send delta, not cumulative!
+            done
+          }));
+        }
+        
+        // Clean up when done
+        if (done) {
+          // Generate receipt
+          if (request && request.userId) {
+            const startTime = new Date(request.createdAt!).getTime();
+            const endTime = new Date().getTime();
+            const processingTime = endTime - startTime;
+            const tokenCount = Math.ceil(jobState.transcript.length / 4);
+            
+            await ReceiptGenerator.createReceipt(
+              request.userId,
+              jobId,
+              nodeId,
+              request.model,
+              request.messages as any[],
+              jobState.transcript,
+              processingTime,
+              tokenCount
+            );
+          }
+          
+          // Clean up job state after a delay (allow late clients to catch up)
+          setTimeout(() => {
+            jobStates.delete(jobId);
+          }, 60000); // Keep for 1 minute
+        }
+        
+        res.json({ ok: true, offset: jobState.committedOffset });
         
       } catch (error) {
         console.error("Streaming error:", error);
@@ -1099,6 +1204,8 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     const sessionId = url.searchParams.get("session");
     const nodeId = url.searchParams.get("nodeId");
     const nodeToken = url.searchParams.get("token");
+    const jobId = url.searchParams.get("jobId");
+    const since = Number(url.searchParams.get("since") || 0);
     
     // Agent connection (for streaming inference responses)
     if (nodeId && nodeToken) {
@@ -1137,7 +1244,43 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
       return;
     }
     
-    // Frontend connection (for receiving inference responses)
+    // Frontend connection with job subscription (new delta mode)
+    if (jobId) {
+      const jobState = jobStates.get(jobId);
+      if (!jobState) {
+        // Create new job state if it doesn't exist
+        const newJobState = {
+          committedOffset: 0,
+          transcript: "",
+          seenSeq: new Set<number>(),
+          clients: new Set<WebSocket>()
+        };
+        jobStates.set(jobId, newJobState);
+        jobState = newJobState;
+      }
+      
+      // Add this client to the job's subscriber list
+      jobState.clients.add(ws);
+      
+      // If client is behind, send the backlog as a single delta
+      if (since < jobState.committedOffset) {
+        const backlog = sliceByOffset(jobState.transcript, since, jobState.committedOffset);
+        ws.send(JSON.stringify({ 
+          jobId, 
+          offset: since, 
+          delta: backlog, 
+          done: false 
+        }));
+      }
+      
+      ws.on("close", () => {
+        jobState?.clients.delete(ws);
+      });
+      
+      return;
+    }
+    
+    // Legacy frontend connection (for receiving inference responses)
     if (!sessionId) {
       ws.close(1008, "Session ID required");
       return;

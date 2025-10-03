@@ -11,12 +11,14 @@ import { useToast } from "@/hooks/use-toast";
 import { useWebSocketChat } from "@/hooks/useWebSocketChat";
 import { MessageContent } from "@/components/MessageContent";
 import { StreamingMessage } from "@/components/StreamingMessage";
+import { ReasoningDisplay } from "@/components/ReasoningDisplay";
 import { TypingIndicator } from "@/components/TypingIndicator";
 
 interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  reasoning?: string;
   timestamp: Date;
   nodeId?: string;
 }
@@ -40,13 +42,20 @@ export default function Chat() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastAssistantMessageIdRef = useRef<string | null>(null);
 
-  const handleStreamComplete = useCallback((finalContent: string) => {
+  const handleStreamComplete = useCallback((finalContent: string, finalReasoning?: string) => {
+    if (lastAssistantMessageIdRef.current) {
+      setMessages(prev => prev.map(msg =>
+        msg.id === lastAssistantMessageIdRef.current
+          ? { ...msg, content: finalContent, reasoning: finalReasoning }
+          : msg
+      ));
+    }
     setTimeout(() => {
       lastAssistantMessageIdRef.current = null;
     }, 0);
   }, []);
 
-  const { isConnected, sendMessage: sendWebSocketMessage, currentResponse, isStreaming } = useWebSocketChat(handleStreamComplete);
+  const { isConnected, sendMessage: sendWebSocketMessage, currentResponse, currentReasoning, isStreaming } = useWebSocketChat(handleStreamComplete);
 
   // Fetch available models
   const { data: modelsData, isLoading: loadingModels } = useQuery<ModelsResponse>({
@@ -183,14 +192,14 @@ export default function Chat() {
 
   // Update tracked assistant message when WebSocket streams
   useEffect(() => {
-    if (currentResponse && lastAssistantMessageIdRef.current) {
+    if ((currentResponse || currentReasoning) && lastAssistantMessageIdRef.current) {
       setMessages(prev => prev.map(msg =>
         msg.id === lastAssistantMessageIdRef.current
-          ? { ...msg, content: currentResponse }
+          ? { ...msg, content: currentResponse, reasoning: currentReasoning }
           : msg
       ));
     }
-  }, [currentResponse]);
+  }, [currentResponse, currentReasoning]);
 
   // Auto scroll to bottom with smooth animation
   useEffect(() => {
@@ -330,31 +339,45 @@ export default function Chat() {
                       <Bot className="w-5 h-5 text-primary" />
                     </div>
                   )}
-                  <div
-                    className={`rounded-lg px-4 py-2 max-w-[70%] ${
-                      message.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted"
-                    }`}
-                  >
-                    {message.role === "user" ? (
-                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                    ) : (
-                      <StreamingMessage 
-                        content={message.content} 
-                        isStreaming={(isStreaming && message.id === lastAssistantMessageIdRef.current) || (message.id === httpStreamingMessageId)}
-                        isWaitingForResponse={!message.content && (message.id === lastAssistantMessageIdRef.current || message.id === httpStreamingMessageId)}
-                        className="text-sm" 
+                  <div className={`max-w-[70%] ${message.role === "user" ? "" : "space-y-2"}`}>
+                    {message.role === "assistant" && message.reasoning && (
+                      <ReasoningDisplay
+                        reasoning={message.id === lastAssistantMessageIdRef.current ? currentReasoning : message.reasoning}
+                        isStreaming={isStreaming && message.id === lastAssistantMessageIdRef.current && !!currentReasoning}
                       />
                     )}
-                    {message.nodeId && (
-                      <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/20">
-                        <Cpu className="w-3 h-3" />
-                        <span className="text-xs opacity-70">
-                          Node: {message.nodeId}
-                        </span>
-                      </div>
+                    {message.role === "assistant" && isStreaming && message.id === lastAssistantMessageIdRef.current && currentReasoning && !message.reasoning && (
+                      <ReasoningDisplay
+                        reasoning={currentReasoning}
+                        isStreaming={true}
+                      />
                     )}
+                    <div
+                      className={`rounded-lg px-4 py-2 ${
+                        message.role === "user"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted"
+                      }`}
+                    >
+                      {message.role === "user" ? (
+                        <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                      ) : (
+                        <StreamingMessage 
+                          content={message.content} 
+                          isStreaming={(isStreaming && message.id === lastAssistantMessageIdRef.current) || (message.id === httpStreamingMessageId)}
+                          isWaitingForResponse={!message.content && (message.id === lastAssistantMessageIdRef.current || message.id === httpStreamingMessageId)}
+                          className="text-sm" 
+                        />
+                      )}
+                      {message.nodeId && (
+                        <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/20">
+                          <Cpu className="w-3 h-3" />
+                          <span className="text-xs opacity-70">
+                            Node: {message.nodeId}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   {message.role === "user" && (
                     <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center flex-shrink-0">

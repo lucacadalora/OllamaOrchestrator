@@ -74,6 +74,7 @@ export const inferenceQueue = pgTable("inference_queue", {
   messages: jsonb("messages").notNull(),
   status: text("status").notNull().default("pending"), // pending, processing, completed, failed
   response: text("response"),
+  reasoning: text("reasoning"),
   error: text("error"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),

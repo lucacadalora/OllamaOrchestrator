@@ -1261,6 +1261,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
         jobState = {
           committedOffset: 0,
           transcript: "",
+          reasoning: "",
           seenSeq: new Set<number>(),
           clients: new Set<WebSocket>()
         };
@@ -1281,8 +1282,9 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
         }));
       }
       
+      const currentJobState = jobState; // Capture for closure
       ws.on("close", () => {
-        jobState?.clients.delete(ws);
+        currentJobState.clients.delete(ws);
       });
       
       return;

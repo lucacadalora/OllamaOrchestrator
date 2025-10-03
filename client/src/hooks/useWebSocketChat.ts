@@ -8,9 +8,10 @@ interface Message {
   nodeId?: string;
 }
 
-export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
+export function useWebSocketChat(onStreamComplete?: (content: string, reasoning?: string) => void) {
   const [isConnected, setIsConnected] = useState(false);
   const [currentResponse, setCurrentResponse] = useState("");
+  const [currentReasoning, setCurrentReasoning] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [offset, setOffset] = useState(0); // Track cursor position
   const wsRef = useRef<WebSocket | null>(null);
@@ -45,9 +46,17 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
 
         // Handle delta-based streaming (new contract)
         if (data.delta !== undefined) {
+          const contentType = data.contentType || "response";
+          
           // Only apply delta if offset matches
           if (data.offset === offsetRef.current) {
-            setCurrentResponse(prev => prev + data.delta);
+            // Update appropriate content based on type
+            if (contentType === "reasoning") {
+              setCurrentReasoning(prev => prev + data.delta);
+            } else {
+              setCurrentResponse(prev => prev + data.delta);
+            }
+            
             const newOffset = offsetRef.current + [...data.delta].length;
             setOffset(newOffset);
             offsetRef.current = newOffset;
@@ -56,7 +65,7 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
               setIsStreaming(false);
               setTimeout(() => {
                 if (onStreamCompleteRef.current) {
-                  onStreamCompleteRef.current(currentResponse);
+                  onStreamCompleteRef.current(currentResponse, currentReasoning);
                 }
               }, 50);
             } else {
@@ -67,6 +76,8 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
         } 
         // Legacy chunk handling (backwards compatibility)
         else if (data.type === "chunk" || data.type === "stream_chunk") {
+          const contentType = data.contentType || "response";
+          
           // Clear any existing debounce timer
           if (updateTimeoutRef.current) {
             clearTimeout(updateTimeoutRef.current);
@@ -74,24 +85,28 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
           
           // Debounce updates for smoother rendering with larger chunks
           updateTimeoutRef.current = setTimeout(() => {
-            setCurrentResponse(prev => {
-              // Ensure we're always appending to the latest state
-              const newContent = prev + (data.chunk || '');
-              
-              if (data.done) {
-                setIsStreaming(false);
-                // Small delay to ensure final state is set
-                setTimeout(() => {
-                  if (onStreamCompleteRef.current) {
-                    onStreamCompleteRef.current(newContent);
-                  }
-                }, 50);
+            if (contentType === "reasoning") {
+              setCurrentReasoning(prev => prev + (data.chunk || ''));
+            } else {
+              setCurrentResponse(prev => {
+                // Ensure we're always appending to the latest state
+                const newContent = prev + (data.chunk || '');
+                
+                if (data.done) {
+                  setIsStreaming(false);
+                  // Small delay to ensure final state is set
+                  setTimeout(() => {
+                    if (onStreamCompleteRef.current) {
+                      onStreamCompleteRef.current(newContent, currentReasoning);
+                    }
+                  }, 50);
+                  return newContent;
+                }
+                
+                setIsStreaming(true);
                 return newContent;
-              }
-              
-              setIsStreaming(true);
-              return newContent;
-            });
+              });
+            }
           }, 30); // 30ms debounce for smooth updates
         } else if (data.type === "request_created") {
           console.log("Request created:", data.requestId);
@@ -129,6 +144,7 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
 
     setIsStreaming(true);
     setCurrentResponse("");
+    setCurrentReasoning("");
     setOffset(0);  // Reset offset for new message
     offsetRef.current = 0;
 
@@ -157,6 +173,7 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
     isConnected,
     sendMessage,
     currentResponse,
+    currentReasoning,
     isStreaming
   };
 }

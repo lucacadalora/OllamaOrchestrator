@@ -184,10 +184,18 @@ export default function Chat() {
     }
   }, [currentResponse]);
 
-  // Auto scroll to bottom
+  // Auto scroll to bottom with smooth animation
   useEffect(() => {
     if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
+      // Use requestAnimationFrame for smoother scrolling
+      requestAnimationFrame(() => {
+        if (scrollAreaRef.current) {
+          scrollAreaRef.current.scrollTo({
+            top: scrollAreaRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
+      });
     }
   }, [messages, currentResponse]);
 
@@ -290,7 +298,7 @@ export default function Chat() {
 
         {/* Messages */}
         <div className="flex-1 overflow-hidden">
-          <ScrollArea className="h-full p-6" ref={scrollAreaRef}>
+          <ScrollArea className="h-full p-6 smooth-scroll" ref={scrollAreaRef}>
             {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <Bot className="w-12 h-12 text-muted-foreground mb-4" />

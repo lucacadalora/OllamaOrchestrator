@@ -38,14 +38,9 @@ export default function Chat() {
   const lastAssistantMessageIdRef = useRef<string | null>(null);
 
   const handleStreamComplete = useCallback((finalContent: string) => {
-    if (lastAssistantMessageIdRef.current) {
-      setMessages(prev => prev.map(msg =>
-        msg.id === lastAssistantMessageIdRef.current
-          ? { ...msg, content: finalContent }
-          : msg
-      ));
+    setTimeout(() => {
       lastAssistantMessageIdRef.current = null;
-    }
+    }, 0);
   }, []);
 
   const { isConnected, sendMessage: sendWebSocketMessage, currentResponse, isStreaming } = useWebSocketChat(handleStreamComplete);
@@ -176,17 +171,14 @@ export default function Chat() {
     setInput("");
   };
 
-  // Update last assistant message when WebSocket streams
+  // Update tracked assistant message when WebSocket streams
   useEffect(() => {
-    if (currentResponse && messages.length > 0) {
-      const lastMessage = messages[messages.length - 1];
-      if (lastMessage.role === "assistant") {
-        setMessages(prev => prev.map((msg, idx) =>
-          idx === prev.length - 1 && msg.role === "assistant"
-            ? { ...msg, content: currentResponse }
-            : msg
-        ));
-      }
+    if (currentResponse && lastAssistantMessageIdRef.current) {
+      setMessages(prev => prev.map(msg =>
+        msg.id === lastAssistantMessageIdRef.current
+          ? { ...msg, content: currentResponse }
+          : msg
+      ));
     }
   }, [currentResponse]);
 

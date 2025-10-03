@@ -45,11 +45,10 @@ export function useWebSocketChat(onStreamComplete?: (content: string) => void) {
             const newContent = prev + data.chunk;
             
             if (data.done) {
+              setIsStreaming(false);
               if (onStreamCompleteRef.current) {
                 onStreamCompleteRef.current(newContent);
               }
-              setIsStreaming(false);
-              setTimeout(() => setCurrentResponse(""), 0);
               return newContent;
             }
             

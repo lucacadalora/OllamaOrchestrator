@@ -243,44 +243,89 @@ def poll_for_inference_requests(token):
     except Exception as e:
         log(f"✗ Poll error: {e}", RED)
 
-def submit_inference_chunk_async(token, request_id, chunk, done=False):
-    """Submit a streaming chunk in a background thread to avoid blocking"""
-    def send_chunk():
-        data = {
-            "id": request_id,
-            "chunk": chunk,
-            "done": done
-        }
-        
-        body = json.dumps(data).encode('utf-8')
-        timestamp = str(int(time.time()))
-        signature = calculate_hmac(token, body, timestamp)
-        
-        req = Request(
-            f"{API_BASE}/v1/inference/stream",
-            data=body,
-            headers={
-                'Content-Type': 'application/json',
-                'X-Node-Id': NODE_ID,
-                'X-Node-Ts': timestamp,
-                'X-Node-Auth': signature
-            },
-            method='POST'
-        )
-        
-        try:
-            with urlopen(req, timeout=5) as response:
-                pass  # Just send the chunk, no need to wait
-        except Exception as e:
-            pass  # Silently ignore chunk submission errors
-    
-    # Send chunk in background thread to not block Ollama streaming
-    thread = threading.Thread(target=send_chunk, daemon=True)
-    thread.start()
+
+# Global state for offset tracking
+request_offsets = {}
+request_sequences = {}
 
 def submit_inference_chunk(token, request_id, chunk, done=False):
-    """Submit a streaming chunk back to console (wrapper for async version)"""
-    submit_inference_chunk_async(token, request_id, chunk, done)
+    """Submit a streaming chunk back to console with offset tracking"""
+    global request_offsets, request_sequences
+    
+    # Initialize if new request
+    if request_id not in request_offsets:
+        request_offsets[request_id] = 0
+        request_sequences[request_id] = 0
+    
+    offset = request_offsets[request_id]
+    seq = request_sequences[request_id]
+    
+    # Prepare delta-based payload
+    data = {
+        "id": request_id,
+        "seq": seq,
+        "offset": offset,
+        "delta": chunk,  # This is already a delta from Ollama
+        "done": done
+    }
+    
+    body = json.dumps(data).encode('utf-8')
+    timestamp = str(int(time.time()))
+    signature = calculate_hmac(token, body, timestamp)
+    
+    req = Request(
+        f"{API_BASE}/v1/inference/stream",
+        data=body,
+        headers={
+            'Content-Type': 'application/json',
+            'X-Node-Id': NODE_ID,
+            'X-Node-Ts': timestamp,
+            'X-Node-Auth': signature
+        },
+        method='POST'
+    )
+    
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            with urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode())
+                
+                # Update offset on success
+                if result.get('ok'):
+                    request_offsets[request_id] = result.get('offset', offset + len(chunk))
+                    request_sequences[request_id] = seq + 1
+                    
+                    # Clean up state when done
+                    if done:
+                        del request_offsets[request_id]
+                        del request_sequences[request_id]
+                    return
+                    
+        except HTTPError as e:
+            if e.code == 409:
+                # Offset mismatch, re-sync with server's expected offset
+                error_data = json.loads(e.read().decode())
+                expected_offset = error_data.get('expected', 0)
+                
+                # Recompute delta if we're out of sync
+                # Since we already sent the chunk, we can't recover it
+                # Log the error and update our offset
+                log(f"⚠ Offset mismatch - expected: {expected_offset}, had: {offset}", YELLOW)
+                request_offsets[request_id] = expected_offset
+                return  # Skip this chunk, continue with next
+            else:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    log(f"✗ Failed to submit chunk after {max_retries} retries", RED)
+                time.sleep(0.1 * retry_count)  # Exponential backoff
+        except Exception as e:
+            retry_count += 1
+            if retry_count >= max_retries:
+                log(f"✗ Chunk submission error: {e}", RED)
+            time.sleep(0.1 * retry_count)
 
 def submit_inference_response(token, request_id, response, error=None):
     """Submit inference response back to console"""

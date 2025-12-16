@@ -941,15 +941,19 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     }
   );
 
-  // Node streaming endpoint - Submit streaming chunks with offset tracking
+  // Reorder buffers for async chunk reassembly
+  const chunkBuffers = new Map<string, Map<number, { delta: string; type: string; done: boolean; agentTs?: number }>>();
+  const nextExpectedSeq = new Map<string, number>();
+  
+  // Node streaming endpoint - Submit streaming chunks with reordering
   app.post(
     "/api/v1/inference/stream",
     requireNodeAuth((nodeId) => storage.getNodeSecret(nodeId)),
     async (req, res) => {
       try {
-        const { id: jobId, seq, offset, delta, cumulative, done, contentType } = req.body;
+        const { id: jobId, seq, delta, contentType, agentTs } = req.body;
         const nodeId = req.nodeId!;
-        const type = contentType || "response"; // Default to response for backwards compatibility
+        const type = contentType || "response";
         
         if (!jobId) {
           return res.status(400).json({ error: "Request ID required" });
@@ -968,127 +972,80 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
           jobStates.set(jobId, jobState);
         }
         
-        // Update node's lastHeartbeat since it's actively streaming (keeps it "online")
+        // Initialize reorder buffer for this job
+        if (!chunkBuffers.has(jobId)) {
+          chunkBuffers.set(jobId, new Map());
+          nextExpectedSeq.set(jobId, 0);
+        }
+        
+        // Update node's lastHeartbeat
         await storage.updateNodeHeartbeat(nodeId);
         
-        // Handle idempotency for sequence numbers
+        // Handle idempotency
         if (seq !== undefined && jobState.seenSeq.has(seq)) {
-          return res.status(200).json({ ok: true, offset: jobState.committedOffset });
+          return res.status(200).json({ ok: true });
         }
         
-        // Compute delta from cumulative if agent sends cumulative (backwards compatibility)
-        let actualDelta = delta;
-        if (!delta && cumulative) {
-          // Agent is sending cumulative text, compute the delta
-          actualDelta = cumulative.slice(jobState.committedOffset);
+        // Store chunk in buffer (might be out of order)
+        const buffer = chunkBuffers.get(jobId)!;
+        if (seq !== undefined && delta) {
+          buffer.set(seq, { delta, type, done: false, agentTs });
         }
         
-        // For compatibility, if neither delta nor cumulative but chunk exists
-        if (!actualDelta && req.body.chunk) {
-          actualDelta = req.body.chunk;
-        }
-        
-        // Validate offset if provided
-        if (offset !== undefined && offset !== jobState.committedOffset) {
-          return res.status(409).json({ 
-            error: "offset_mismatch", 
-            expected: jobState.committedOffset 
-          });
-        }
-        
-        // Apply delta to appropriate field
-        if (actualDelta) {
-          if (type === "reasoning") {
-            jobState.reasoning += actualDelta;
-          } else {
-            jobState.transcript += actualDelta;
-          }
-          jobState.committedOffset += [...actualDelta].length; // Codepoint-safe
+        // Process chunks in order
+        let expectedSeq = nextExpectedSeq.get(jobId) || 0;
+        while (buffer.has(expectedSeq)) {
+          const chunk = buffer.get(expectedSeq)!;
+          buffer.delete(expectedSeq);
           
-          // IMPORTANT: Emit token event for SSE streaming (HTTP polling path)
-          // This allows SSE endpoint to receive tokens from HTTP polling agents
-          // just like it receives tokens from WebSocket agents
+          // Apply delta to transcript
+          if (chunk.type === "reasoning") {
+            jobState.reasoning += chunk.delta;
+          } else {
+            jobState.transcript += chunk.delta;
+          }
+          jobState.committedOffset += [...chunk.delta].length;
+          jobState.seenSeq.add(expectedSeq);
+          
+          // Emit token event for SSE (IN ORDER!)
           agentManager.emit('token', {
             jobId,
-            token: type === "reasoning" ? "" : actualDelta,
-            reasoning: type === "reasoning" ? actualDelta : undefined,
-            done: !!done,
-            agentId: nodeId
+            token: chunk.type === "reasoning" ? "" : chunk.delta,
+            reasoning: chunk.type === "reasoning" ? chunk.delta : undefined,
+            done: chunk.done,
+            agentId: nodeId,
+            agentTs: chunk.agentTs,
+            serverReceiveTs: Date.now()
           });
-        }
-        
-        // Track sequence if provided
-        if (seq !== undefined) {
-          jobState.seenSeq.add(seq);
-        }
-        
-        // Update database with full transcript
-        const request = await storage.getRequestById(jobId);
-        if (request) {
-          await storage.updateRequestStatus(
-            jobId,
-            done ? "completed" : "streaming",
-            jobState.transcript
-          );
-        }
-        
-        // Fan-out delta to all WebSocket clients (not cumulative!)
-        const frame = JSON.stringify({ 
-          jobId, 
-          offset: offset ?? jobState.committedOffset - [...actualDelta].length,
-          delta: actualDelta, 
-          contentType: type,
-          done: !!done 
-        });
-        
-        // Send to all WebSocket clients watching this job
-        jobState.clients.forEach(ws => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(frame);
-          }
-        });
-        
-        // Also send to request-specific connection for backwards compatibility
-        const requestConnections = (app as any).wsConnections as Map<string, WebSocket>;
-        const requestWs = requestConnections.get(jobId);
-        if (requestWs && requestWs.readyState === WebSocket.OPEN) {
-          requestWs.send(JSON.stringify({
-            type: "chunk",
-            requestId: jobId,
-            chunk: actualDelta,  // Send delta, not cumulative!
-            contentType: type,
-            done
-          }));
-        }
-        
-        // Clean up when done
-        if (done) {
-          // Generate receipt
-          if (request && request.userId) {
-            const startTime = new Date(request.createdAt!).getTime();
-            const endTime = new Date().getTime();
-            const processingTime = endTime - startTime;
-            const tokenCount = Math.ceil(jobState.transcript.length / 4);
-            
-            await ReceiptGenerator.createReceipt(
-              request.userId,
-              jobId,
-              nodeId,
-              request.model,
-              request.messages as any[],
-              jobState.transcript,
-              processingTime,
-              tokenCount
-            );
-          }
           
-          // Clean up job state after a delay (allow late clients to catch up)
-          setTimeout(() => {
-            jobStates.delete(jobId);
-          }, 60000); // Keep for 1 minute
+          // Fan-out to WebSocket clients
+          const frame = JSON.stringify({ 
+            jobId, 
+            delta: chunk.delta, 
+            contentType: chunk.type,
+            done: chunk.done 
+          });
+          jobState.clients.forEach(ws => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(frame);
+            }
+          });
+          
+          expectedSeq++;
+        }
+        nextExpectedSeq.set(jobId, expectedSeq);
+        
+        // Update database periodically (not every chunk for perf)
+        if (expectedSeq % 10 === 0) {
+          const request = await storage.getRequestById(jobId);
+          if (request) {
+            await storage.updateRequestStatus(jobId, "streaming", jobState.transcript);
+          }
         }
         
-        res.json({ ok: true, offset: jobState.committedOffset });
+        // Clean up reorder buffer when job is complete (handled by /complete endpoint)
+        
+        res.json({ ok: true });
         
       } catch (error) {
         console.error("Streaming error:", error);

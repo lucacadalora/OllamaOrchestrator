@@ -12,6 +12,8 @@ import hashlib
 import json
 import sys
 import threading
+import platform
+import subprocess
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -39,6 +41,157 @@ def log(message, color=""):
     """Print colored log message with timestamp"""
     timestamp = time.strftime("%H:%M:%S")
     print(f"{color}[{timestamp}] {message}{RESET}", flush=True)
+
+# Cached hardware info (collected once on startup)
+_hardware_info = None
+
+def get_hardware_info():
+    """Detect hardware information (CPU, GPU, memory, OS)"""
+    global _hardware_info
+    if _hardware_info is not None:
+        return _hardware_info
+    
+    info = {
+        "osName": platform.system(),
+        "osVersion": platform.release(),
+        "architecture": platform.machine(),
+    }
+    
+    # Detect CPU
+    try:
+        if platform.system() == "Darwin":  # macOS
+            result = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                info["cpuModel"] = result.stdout.strip()
+            else:
+                # For Apple Silicon, get chip name
+                result = subprocess.run(
+                    ["system_profiler", "SPHardwareDataType"],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in result.stdout.split('\n'):
+                    if 'Chip:' in line or 'Processor Name:' in line:
+                        info["cpuModel"] = line.split(':')[1].strip()
+                        break
+        elif platform.system() == "Linux":
+            with open("/proc/cpuinfo", "r") as f:
+                for line in f:
+                    if line.startswith("model name"):
+                        info["cpuModel"] = line.split(":")[1].strip()
+                        break
+        elif platform.system() == "Windows":
+            result = subprocess.run(
+                ["wmic", "cpu", "get", "name"],
+                capture_output=True, text=True, timeout=5
+            )
+            lines = result.stdout.strip().split('\n')
+            if len(lines) > 1:
+                info["cpuModel"] = lines[1].strip()
+    except Exception:
+        pass
+    
+    # Detect GPU
+    try:
+        if platform.system() == "Darwin":  # macOS
+            result = subprocess.run(
+                ["system_profiler", "SPDisplaysDataType"],
+                capture_output=True, text=True, timeout=10
+            )
+            for line in result.stdout.split('\n'):
+                if 'Chipset Model:' in line:
+                    info["gpuModel"] = line.split(':')[1].strip()
+                    break
+            # For Apple Silicon, GPU is integrated
+            if "gpuModel" not in info and "Apple" in info.get("cpuModel", ""):
+                info["gpuModel"] = info.get("cpuModel", "Apple GPU")
+        elif platform.system() == "Linux":
+            # Try nvidia-smi first
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                info["gpuModel"] = result.stdout.strip().split('\n')[0]
+            else:
+                # Fallback to lspci
+                result = subprocess.run(
+                    ["lspci"],
+                    capture_output=True, text=True, timeout=5
+                )
+                for line in result.stdout.split('\n'):
+                    if 'VGA' in line or '3D' in line:
+                        info["gpuModel"] = line.split(':')[-1].strip()
+                        break
+        elif platform.system() == "Windows":
+            result = subprocess.run(
+                ["wmic", "path", "win32_VideoController", "get", "name"],
+                capture_output=True, text=True, timeout=5
+            )
+            lines = result.stdout.strip().split('\n')
+            if len(lines) > 1:
+                info["gpuModel"] = lines[1].strip()
+    except Exception:
+        pass
+    
+    # Detect total memory
+    try:
+        if platform.system() == "Darwin":
+            result = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                mem_bytes = int(result.stdout.strip())
+                info["memoryGb"] = round(mem_bytes / (1024**3), 1)
+        elif platform.system() == "Linux":
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if line.startswith("MemTotal"):
+                        mem_kb = int(line.split()[1])
+                        info["memoryGb"] = round(mem_kb / (1024**2), 1)
+                        break
+        elif platform.system() == "Windows":
+            result = subprocess.run(
+                ["wmic", "computersystem", "get", "totalphysicalmemory"],
+                capture_output=True, text=True, timeout=5
+            )
+            lines = result.stdout.strip().split('\n')
+            if len(lines) > 1:
+                mem_bytes = int(lines[1].strip())
+                info["memoryGb"] = round(mem_bytes / (1024**3), 1)
+    except Exception:
+        pass
+    
+    # Determine device type
+    cpu = info.get("cpuModel", "").lower()
+    if "apple m" in cpu:
+        info["deviceType"] = "MacBook " + info.get("cpuModel", "Apple Silicon").replace("Apple ", "")
+    elif "nvidia" in info.get("gpuModel", "").lower():
+        gpu = info.get("gpuModel", "")
+        if "rtx" in gpu.lower() or "gtx" in gpu.lower() or "a100" in gpu.lower():
+            info["deviceType"] = gpu
+        else:
+            info["deviceType"] = "NVIDIA GPU Server"
+    elif "amd" in info.get("gpuModel", "").lower():
+        info["deviceType"] = info.get("gpuModel", "AMD GPU")
+    elif platform.system() == "Darwin":
+        info["deviceType"] = "Mac"
+    else:
+        info["deviceType"] = f"{platform.system()} Server"
+    
+    _hardware_info = info
+    log(f"  Hardware detected: {info.get('deviceType', 'Unknown')}", BLUE)
+    if info.get("cpuModel"):
+        log(f"  CPU: {info['cpuModel']}", BLUE)
+    if info.get("gpuModel"):
+        log(f"  GPU: {info['gpuModel']}", BLUE)
+    if info.get("memoryGb"):
+        log(f"  Memory: {info['memoryGb']} GB", BLUE)
+    
+    return info
 
 def calculate_hmac(secret, body, timestamp):
     """Calculate HMAC-SHA256 signature for request authentication"""
@@ -107,14 +260,31 @@ def register_node():
         sys.exit(1)
 
 def send_heartbeat(token, ready, model_count=0, model_names=None):
-    """Send heartbeat to DGON network with node status"""
+    """Send heartbeat to DGON network with node status and hardware info"""
+    # Get hardware info (cached after first call)
+    hardware = get_hardware_info()
+    
+    # Get location from environment (user can set LOCATION env var like "Jakarta, Indonesia")
+    location_str = os.getenv("LOCATION", "")
+    location = None
+    if location_str and "," in location_str:
+        parts = location_str.split(",", 1)
+        location = {
+            "city": parts[0].strip(),
+            "country": parts[1].strip()
+        }
+    
     data = {
         "gpuUtil": 0.4,
         "memUsedGb": 6.0,
         "p95Ms": 320,
         "ready": ready,
-        "models": model_names or []
+        "models": model_names or [],
+        "hardware": hardware,
     }
+    
+    if location:
+        data["location"] = location
     
     body = json.dumps(data).encode('utf-8')
     timestamp = str(int(time.time()))

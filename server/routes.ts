@@ -323,7 +323,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
         const previousStatus = node.status;
         
         await storage.updateNodeStatus(nodeId, newStatus, ipAddress);
-        await storage.updateNodeHeartbeat(nodeId, data.models || []);
+        await storage.updateNodeHeartbeat(nodeId, data.models || [], data.hardware, data.location);
         
         // Lookup geolocation if we have an IP and no location yet
         if (ipAddress && !node.city && !node.country) {

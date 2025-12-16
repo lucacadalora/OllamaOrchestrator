@@ -13,7 +13,7 @@ export interface IStorage {
   getNode(id: string): Promise<Node | undefined>;
   updateNodeStatus(id: string, status: string, ipAddress?: string): Promise<void>;
   updateNodeLocation(id: string, city: string, country: string, latitude: number, longitude: number): Promise<void>;
-  updateNodeHeartbeat(id: string, models?: string[]): Promise<void>;
+  updateNodeHeartbeat(id: string, models?: string[], hardware?: any, location?: { city?: string; country?: string }): Promise<void>;
   listNodes(filters?: { status?: string; region?: string; runtime?: string; userId?: string }): Promise<Node[]>;
   
   // Node secrets
@@ -123,10 +123,20 @@ export class DatabaseStorage implements IStorage {
       .where(eq(nodes.id, id));
   }
 
-  async updateNodeHeartbeat(id: string, models?: string[]): Promise<void> {
+  async updateNodeHeartbeat(id: string, models?: string[], hardware?: any, location?: { city?: string; country?: string }): Promise<void> {
     const updateData: any = { lastHeartbeat: new Date() };
     if (models !== undefined) {
       updateData.models = models;
+    }
+    if (hardware !== undefined) {
+      updateData.hardwareMetadata = hardware;
+      if (hardware.deviceType) {
+        updateData.deviceType = hardware.deviceType;
+      }
+    }
+    if (location) {
+      if (location.city) updateData.city = location.city;
+      if (location.country) updateData.country = location.country;
     }
     await db
       .update(nodes)

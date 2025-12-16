@@ -27,6 +27,8 @@ export const nodes = pgTable("nodes", {
   country: text("country"),
   latitude: numeric("latitude"),
   longitude: numeric("longitude"),
+  deviceType: text("device_type"),
+  hardwareMetadata: jsonb("hardware_metadata"),
   lastHeartbeat: timestamp("last_heartbeat", { withTimezone: true }).defaultNow(),
   onlineSince: timestamp("online_since", { withTimezone: true }),
   totalUptime: numeric("total_uptime").default("0"),
@@ -152,6 +154,19 @@ export const loginSchema = z.object({
   password: z.string().min(6),
 });
 
+// Hardware metadata schema
+export const hardwareMetadataSchema = z.object({
+  cpuModel: z.string().optional(),
+  gpuModel: z.string().optional(),
+  memoryGb: z.number().optional(),
+  osName: z.string().optional(),
+  osVersion: z.string().optional(),
+  deviceType: z.string().optional(),
+  architecture: z.string().optional(),
+});
+
+export type HardwareMetadata = z.infer<typeof hardwareMetadataSchema>;
+
 // Heartbeat schema
 export const heartbeatSchema = z.object({
   gpuUtil: z.number().optional(),
@@ -159,6 +174,11 @@ export const heartbeatSchema = z.object({
   p95Ms: z.number().optional(),
   ready: z.boolean(),
   models: z.array(z.string()).optional().default([]),
+  hardware: hardwareMetadataSchema.optional(),
+  location: z.object({
+    city: z.string().optional(),
+    country: z.string().optional(),
+  }).optional(),
 });
 
 export type HeartbeatData = z.infer<typeof heartbeatSchema>;

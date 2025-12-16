@@ -1171,7 +1171,8 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     }
   });
 
-  // SSE Streaming endpoint - Direct streaming without polling delay
+  // SSE Streaming endpoint - Event-driven streaming (no polling!)
+  // Tokens flow: Agent WebSocket → Event → SSE → Browser (instant!)
   app.post("/api/v1/chat/stream", requireAuth, async (req, res) => {
     const { model, messages, options } = req.body;
     const userId = req.session.userId!;
@@ -1183,13 +1184,13 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     // Check if any nodes have this model and are online
     const activeNodes = await storage.listNodes({ status: "active" });
     const now = new Date();
-    const thirtySecondsAgo = new Date(now.getTime() - 30000);
+    const sixtySecondsAgo = new Date(now.getTime() - 60000);
     
     const availableNodes = activeNodes.filter(node => 
       node.models && 
       node.models.includes(model) &&
       node.lastHeartbeat && 
-      new Date(node.lastHeartbeat) >= thirtySecondsAgo
+      new Date(node.lastHeartbeat) >= sixtySecondsAgo
     );
     
     if (availableNodes.length === 0) {
@@ -1213,21 +1214,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
       jobStates.set(jobId, jobState);
     }
     
-    // Try to push job to a WebSocket-connected agent (instant delivery)
-    const { submitted, agentId } = agentManager.submitJob({
-      jobId,
-      model,
-      messages,
-      options
-    });
-    
-    if (submitted) {
-      console.log(`Job ${jobId} pushed to agent ${agentId} via WebSocket (instant)`);
-    } else {
-      console.log(`No WebSocket agents available, job ${jobId} queued for HTTP polling`);
-    }
-    
-    // Set SSE headers
+    // Set SSE headers BEFORE submitting job
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -1237,110 +1224,165 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     // Send initial event with job ID
     res.write(`data: ${JSON.stringify({ type: 'started', jobId })}\n\n`);
     
-    // Track last sent offset to avoid duplicate sends
-    let lastSentOffset = 0;
-    let lastSentReasoningLength = 0;
     let isComplete = false;
+    let cleanup: (() => void) | null = null;
     
-    // Polling interval for job state changes (10ms for near-real-time)
-    const checkInterval = setInterval(() => {
-      const state = jobStates.get(jobId);
-      if (!state) {
-        clearInterval(checkInterval);
-        if (!isComplete) {
-          res.write(`data: ${JSON.stringify({ type: 'error', error: 'Job not found' })}\n\n`);
-          res.end();
-        }
-        return;
-      }
+    // EVENT-DRIVEN: Listen for tokens from AgentConnectionManager (WebSocket path)
+    // This is INSTANT - no polling delay!
+    const onToken = (event: { jobId: string; token: string; done: boolean; agentId: string; reasoning?: string }) => {
+      if (event.jobId !== jobId || isComplete) return;
       
-      // Send reasoning delta if new reasoning content
-      if (state.reasoning.length > lastSentReasoningLength) {
-        const reasoningDelta = state.reasoning.slice(lastSentReasoningLength);
+      // Send reasoning delta immediately
+      if (event.reasoning) {
         res.write(`data: ${JSON.stringify({ 
           type: 'delta', 
           contentType: 'reasoning',
-          delta: reasoningDelta,
-          offset: lastSentReasoningLength
+          delta: event.reasoning
         })}\n\n`);
-        lastSentReasoningLength = state.reasoning.length;
       }
       
-      // Send response delta if new content
-      if (state.committedOffset > lastSentOffset) {
-        const delta = sliceByOffset(state.transcript, lastSentOffset, state.committedOffset);
+      // Send response token immediately
+      if (event.token) {
         res.write(`data: ${JSON.stringify({ 
           type: 'delta', 
           contentType: 'response',
-          delta,
-          offset: lastSentOffset
+          delta: event.token
         })}\n\n`);
-        lastSentOffset = state.committedOffset;
       }
-    }, 10); // Check every 10ms for updates
+    };
     
-    // Watch for job completion
-    const completionCheck = setInterval(async () => {
-      try {
-        const dbRequest = await storage.getRequestById(jobId);
-        if (dbRequest && (dbRequest.status === 'completed' || dbRequest.status === 'failed')) {
-          isComplete = true;
+    const onJobComplete = (event: { jobId: string; agentId: string }) => {
+      if (event.jobId !== jobId || isComplete) return;
+      isComplete = true;
+      
+      res.write(`data: ${JSON.stringify({ type: 'done', nodeId: event.agentId })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+      
+      if (cleanup) cleanup();
+    };
+    
+    const onJobError = (event: { jobId: string; error: string; agentId: string }) => {
+      if (event.jobId !== jobId || isComplete) return;
+      isComplete = true;
+      
+      res.write(`data: ${JSON.stringify({ type: 'error', error: event.error })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+      
+      if (cleanup) cleanup();
+    };
+    
+    // Subscribe to AgentConnectionManager events (WebSocket path - instant!)
+    agentManager.on('token', onToken);
+    agentManager.on('job:complete', onJobComplete);
+    agentManager.on('job:error', onJobError);
+    
+    cleanup = () => {
+      agentManager.off('token', onToken);
+      agentManager.off('job:complete', onJobComplete);
+      agentManager.off('job:error', onJobError);
+    };
+    
+    // Try to push job to a WebSocket-connected agent (instant delivery)
+    const { submitted, agentId } = agentManager.submitJob({
+      jobId,
+      model,
+      messages,
+      options
+    });
+    
+    if (submitted) {
+      console.log(`Job ${jobId} pushed to agent ${agentId} via WebSocket (instant streaming)`);
+    } else {
+      console.log(`No WebSocket agents available, job ${jobId} queued for HTTP polling`);
+      
+      // FALLBACK: For HTTP polling agents, we still need to poll jobStates
+      // This only runs when no WebSocket agents are available
+      const checkInterval = setInterval(() => {
+        if (isComplete) {
           clearInterval(checkInterval);
-          clearInterval(completionCheck);
-          
-          // Send any remaining content
-          const state = jobStates.get(jobId);
-          if (state) {
-            if (state.reasoning.length > lastSentReasoningLength) {
-              const reasoningDelta = state.reasoning.slice(lastSentReasoningLength);
-              res.write(`data: ${JSON.stringify({ 
-                type: 'delta', 
-                contentType: 'reasoning',
-                delta: reasoningDelta,
-                offset: lastSentReasoningLength
-              })}\n\n`);
-            }
-            if (state.committedOffset > lastSentOffset) {
-              const delta = sliceByOffset(state.transcript, lastSentOffset, state.committedOffset);
-              res.write(`data: ${JSON.stringify({ 
-                type: 'delta', 
-                contentType: 'response',
-                delta,
-                offset: lastSentOffset
-              })}\n\n`);
-            }
-          }
-          
-          // Send completion event
-          if (dbRequest.status === 'failed') {
-            res.write(`data: ${JSON.stringify({ type: 'error', error: dbRequest.error || 'Request failed' })}\n\n`);
-          } else {
-            res.write(`data: ${JSON.stringify({ type: 'done', nodeId: dbRequest.nodeId })}\n\n`);
-          }
-          res.write('data: [DONE]\n\n');
-          res.end();
+          return;
         }
-      } catch (error) {
-        console.error('SSE completion check error:', error);
-      }
-    }, 50); // Check completion every 50ms
+        
+        const state = jobStates.get(jobId);
+        if (!state) return;
+        
+        // Check for new content from HTTP polling agents
+        // (WebSocket tokens bypass this entirely)
+      }, 10);
+      
+      // Watch for completion from HTTP polling agents
+      const completionCheck = setInterval(async () => {
+        if (isComplete) {
+          clearInterval(completionCheck);
+          clearInterval(checkInterval);
+          return;
+        }
+        
+        try {
+          const dbRequest = await storage.getRequestById(jobId);
+          if (dbRequest && (dbRequest.status === 'completed' || dbRequest.status === 'failed')) {
+            isComplete = true;
+            clearInterval(checkInterval);
+            clearInterval(completionCheck);
+            
+            // Send any remaining content from job state
+            const state = jobStates.get(jobId);
+            if (state) {
+              if (state.transcript) {
+                res.write(`data: ${JSON.stringify({ 
+                  type: 'delta', 
+                  contentType: 'response',
+                  delta: state.transcript
+                })}\n\n`);
+              }
+              if (state.reasoning) {
+                res.write(`data: ${JSON.stringify({ 
+                  type: 'delta', 
+                  contentType: 'reasoning',
+                  delta: state.reasoning
+                })}\n\n`);
+              }
+            }
+            
+            if (dbRequest.status === 'failed') {
+              res.write(`data: ${JSON.stringify({ type: 'error', error: dbRequest.error || 'Request failed' })}\n\n`);
+            } else {
+              res.write(`data: ${JSON.stringify({ type: 'done', nodeId: dbRequest.nodeId })}\n\n`);
+            }
+            res.write('data: [DONE]\n\n');
+            res.end();
+            
+            if (cleanup) cleanup();
+          }
+        } catch (error) {
+          console.error('SSE completion check error:', error);
+        }
+      }, 50);
+      
+      // Store these for cleanup
+      req.on('close', () => {
+        clearInterval(checkInterval);
+        clearInterval(completionCheck);
+      });
+    }
     
     // Timeout after 5 minutes
     const timeout = setTimeout(() => {
+      if (isComplete) return;
       isComplete = true;
-      clearInterval(checkInterval);
-      clearInterval(completionCheck);
       res.write(`data: ${JSON.stringify({ type: 'error', error: 'Request timeout' })}\n\n`);
       res.write('data: [DONE]\n\n');
       res.end();
+      if (cleanup) cleanup();
     }, 5 * 60 * 1000);
     
     // Clean up on client disconnect
     req.on('close', () => {
       isComplete = true;
-      clearInterval(checkInterval);
-      clearInterval(completionCheck);
       clearTimeout(timeout);
+      if (cleanup) cleanup();
     });
   });
 

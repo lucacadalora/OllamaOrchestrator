@@ -210,7 +210,7 @@ def poll_for_inference_requests(token):
                     full_reasoning = ""
                     response_buffer = []
                     reasoning_buffer = []
-                    buffer_size = 25  # Buffer more tokens for phrase-based streaming like ChatGPT
+                    buffer_size = 3  # Small buffer for near-real-time streaming
                     last_flush_time = time.time()
                     
                     with urlopen(ollama_req, timeout=300) as ollama_response:
@@ -231,13 +231,13 @@ def poll_for_inference_requests(token):
                                     full_response += response_chunk
                                     response_buffer.append(response_chunk)
                                 
-                                # Send chunks in batches with time-based flush
+                                # Send chunks in batches with time-based flush (faster for real-time streaming)
                                 current_time = time.time()
                                 should_flush = (
                                     len(response_buffer) >= buffer_size or
                                     len(reasoning_buffer) >= buffer_size or
                                     chunk.get("done", False) or  # Stream complete
-                                    (current_time - last_flush_time > 0.5 and (response_buffer or reasoning_buffer))
+                                    (current_time - last_flush_time > 0.05 and (response_buffer or reasoning_buffer))  # 50ms flush
                                 )
                                 
                                 if should_flush:
@@ -704,9 +704,9 @@ Configuration:
             sys.exit(0)
     
     # Fallback to HTTP polling mode
-    log(f"   Mode: HTTP polling (slower)", YELLOW)
+    log(f"   Mode: HTTP polling", YELLOW)
     log(f"   Heartbeat: every 10 seconds", BLUE)
-    log(f"   Inference polling: every 2 seconds", BLUE)
+    log(f"   Inference polling: every 500ms", BLUE)
     log(f"   Press Ctrl+C to stop", BLUE)
     log(f"", "")
     
@@ -726,8 +726,8 @@ Configuration:
             if ready:
                 poll_for_inference_requests(token)
             
-            # Short sleep to prevent busy waiting
-            time.sleep(2)
+            # Short sleep - 500ms for faster request pickup
+            time.sleep(0.5)
     except KeyboardInterrupt:
         log(f"", "")
         log(f"👋 Agent stopped by user", YELLOW)

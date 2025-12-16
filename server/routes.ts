@@ -901,6 +901,13 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
         
         await storage.updateRequestStatus(id, status, response, error);
         
+        // Emit job completion/error event for SSE streaming (HTTP polling path)
+        if (status === "completed") {
+          agentManager.emit('job:complete', { jobId: id, agentId: nodeId });
+        } else if (status === "failed") {
+          agentManager.emit('job:error', { jobId: id, error: error || "Request failed", agentId: nodeId });
+        }
+        
         // If task completed successfully, generate a receipt
         if (status === "completed" && response) {
           const request = await storage.getRequestById(id);
@@ -997,6 +1004,17 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
             jobState.transcript += actualDelta;
           }
           jobState.committedOffset += [...actualDelta].length; // Codepoint-safe
+          
+          // IMPORTANT: Emit token event for SSE streaming (HTTP polling path)
+          // This allows SSE endpoint to receive tokens from HTTP polling agents
+          // just like it receives tokens from WebSocket agents
+          agentManager.emit('token', {
+            jobId,
+            token: type === "reasoning" ? "" : actualDelta,
+            reasoning: type === "reasoning" ? actualDelta : undefined,
+            done: !!done,
+            agentId: nodeId
+          });
         }
         
         // Track sequence if provided

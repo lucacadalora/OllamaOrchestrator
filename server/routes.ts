@@ -711,7 +711,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
   app.get("/api/v1/models", async (req, res) => {
     try {
       const activeNodes = await storage.listNodes({ status: "active" });
-      const modelsMap = new Map<string, string[]>();
+      const modelsMap = new Map<string, { id: string; deviceType: string | null; city: string | null; country: string | null; hardwareMetadata: any }[]>();
       
       // Filter out nodes that haven't sent heartbeat in last 30 seconds
       const now = new Date();
@@ -730,19 +730,28 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
           return;
         }
         
+        const nodeInfo = {
+          id: node.id,
+          deviceType: node.deviceType,
+          city: node.city,
+          country: node.country,
+          hardwareMetadata: node.hardwareMetadata
+        };
+        
         const models = node.models || [];
         models.forEach(model => {
           if (!modelsMap.has(model)) {
             modelsMap.set(model, []);
           }
-          modelsMap.get(model)!.push(node.id);
+          modelsMap.get(model)!.push(nodeInfo);
         });
       });
       
-      const availableModels = Array.from(modelsMap.entries()).map(([model, nodeIds]) => ({
+      const availableModels = Array.from(modelsMap.entries()).map(([model, nodeInfos]) => ({
         model,
-        nodeCount: nodeIds.length,
-        nodes: nodeIds
+        nodeCount: nodeInfos.length,
+        nodes: nodeInfos.map(n => n.id),
+        nodeDetails: nodeInfos
       }));
       
       console.log(`[Models] Returning ${availableModels.length} models:`, availableModels.map(m => `${m.model}(${m.nodeCount})`).join(', '));

@@ -26,60 +26,64 @@ interface Message {
   nodeId?: string;
 }
 
+interface NodeDetail {
+  id: string;
+  deviceType: string | null;
+  city: string | null;
+  country: string | null;
+  hardwareMetadata: {
+    cpuModel?: string;
+    gpuModel?: string;
+    memoryGb?: number;
+    osName?: string;
+    osVersion?: string;
+    deviceType?: string;
+    architecture?: string;
+  } | null;
+}
+
 interface Model {
   model: string;
   nodeCount: number;
   nodes: string[];
+  nodeDetails?: NodeDetail[];
 }
 
 interface ModelsResponse {
   models: Model[];
 }
 
-interface NodeInfo {
-  id: string;
-  region: string;
-  runtime: string;
-  status: string;
-}
-
-const hashCode = (str: string): number => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
+function getNodeDisplayInfo(node: NodeDetail) {
+  const hw = node.hardwareMetadata;
+  
+  // Build device display string
+  let deviceDisplay = node.deviceType || "Unknown Device";
+  if (hw?.gpuModel && !deviceDisplay.toLowerCase().includes(hw.gpuModel.toLowerCase())) {
+    deviceDisplay = hw.gpuModel;
+  } else if (hw?.deviceType) {
+    deviceDisplay = hw.deviceType;
   }
-  return Math.abs(hash);
-};
-
-const REGIONS = [
-  "Tokyo, Japan",
-  "Osaka, Japan",
-  "Seoul, Korea",
-  "Singapore",
-  "San Francisco, USA",
-  "New York, USA",
-  "London, UK",
-  "Frankfurt, Germany",
-  "Sydney, Australia",
-  "Mumbai, India"
-];
-
-const GPU_TYPES = [
-  "RTX 4090 (24GB)",
-  "RTX 4080 (16GB)",
-  "RTX 3090 (24GB)",
-  "A100 (40GB)",
-  "A10G (24GB)"
-];
-
-function getNodeDetails(nodeId: string) {
-  const hash = hashCode(nodeId);
+  
+  // Memory info
+  let memoryDisplay = "";
+  if (hw?.memoryGb) {
+    memoryDisplay = ` (${hw.memoryGb}GB)`;
+  }
+  
+  // Location
+  let locationDisplay = "Unknown Location";
+  if (node.city && node.country) {
+    locationDisplay = `${node.city}, ${node.country}`;
+  } else if (node.country) {
+    locationDisplay = node.country;
+  } else if (node.city) {
+    locationDisplay = node.city;
+  }
+  
   return {
-    region: REGIONS[hash % REGIONS.length],
-    gpu: GPU_TYPES[hash % GPU_TYPES.length],
-    blocksServed: 200 + (hash % 400)
+    device: deviceDisplay + memoryDisplay,
+    location: locationDisplay,
+    blocksServed: Math.floor(Math.random() * 400) + 200
   };
 }
 
@@ -189,22 +193,22 @@ function WorkerProgressBar({
 }
 
 function WorkerStatusCard({ 
-  nodeId, 
+  node, 
   isActive,
   progress 
 }: { 
-  nodeId: string; 
+  node: NodeDetail; 
   isActive: boolean;
   progress: number;
 }) {
-  const details = getNodeDetails(nodeId);
+  const displayInfo = getNodeDisplayInfo(node);
   
   return (
     <div className="py-3 border-b border-border last:border-0">
       <div className="flex items-start justify-between mb-2">
         <div>
-          <p className="text-sm font-medium text-foreground">{details.gpu}</p>
-          <p className="text-xs text-muted-foreground">{details.region}</p>
+          <p className="text-sm font-medium text-foreground">{displayInfo.device}</p>
+          <p className="text-xs text-muted-foreground">{displayInfo.location}</p>
         </div>
         <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
           isActive 
@@ -217,7 +221,7 @@ function WorkerStatusCard({
       <WorkerProgressBar 
         progress={isActive ? progress : 0} 
         isActive={isActive}
-        blocksServed={details.blocksServed}
+        blocksServed={displayInfo.blocksServed}
       />
     </div>
   );
@@ -225,16 +229,17 @@ function WorkerStatusCard({
 
 function InferenceBackendPanel({ 
   model, 
-  nodes, 
+  nodeDetails, 
   isStreaming,
   streamProgress
 }: { 
   model: string | null;
-  nodes: string[];
+  nodeDetails: NodeDetail[];
   isStreaming: boolean;
   streamProgress: number;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
+  const nodeIds = nodeDetails.map(n => n.id);
   
   if (!isExpanded) {
     return (
@@ -276,14 +281,14 @@ function InferenceBackendPanel({
             </div>
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1 text-right">Distribution</p>
-              <DistributionGraph nodes={nodes} isActive={isStreaming} />
+              <DistributionGraph nodes={nodeIds} isActive={isStreaming} />
             </div>
           </div>
           
           {/* Workers Count */}
           <div>
             <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Workers</p>
-            <p className="text-3xl font-bold text-foreground">{nodes.length}</p>
+            <p className="text-3xl font-bold text-foreground">{nodeDetails.length}</p>
           </div>
           
           {/* Worker Status */}
@@ -298,24 +303,24 @@ function InferenceBackendPanel({
               </div>
             </div>
             
-            {nodes.length === 0 ? (
+            {nodeDetails.length === 0 ? (
               <div className="py-8 text-center">
                 <p className="text-sm text-muted-foreground">No workers connected</p>
                 <p className="text-xs text-muted-foreground mt-1">Start an agent to begin</p>
               </div>
             ) : (
               <div className="space-y-0">
-                {nodes.slice(0, 6).map((nodeId, idx) => (
+                {nodeDetails.slice(0, 6).map((node, idx) => (
                   <WorkerStatusCard
-                    key={`${nodeId}-${idx}`}
-                    nodeId={nodeId}
+                    key={`${node.id}-${idx}`}
+                    node={node}
                     isActive={isStreaming && idx === 0}
                     progress={streamProgress}
                   />
                 ))}
-                {nodes.length > 6 && (
+                {nodeDetails.length > 6 && (
                   <p className="text-xs text-muted-foreground text-center py-2">
-                    +{nodes.length - 6} more workers
+                    +{nodeDetails.length - 6} more workers
                   </p>
                 )}
               </div>
@@ -525,8 +530,9 @@ export default function Chat() {
   }, [messages, currentResponse]);
 
   const models = modelsData?.models || [];
-  const allNodes = models.flatMap(m => m.nodes);
-  const selectedModelNodes = models.find(m => m.model === selectedModel)?.nodes || [];
+  const allNodeDetails: NodeDetail[] = models.flatMap(m => m.nodeDetails || []);
+  const selectedModelData = models.find(m => m.model === selectedModel);
+  const selectedModelNodeDetails: NodeDetail[] = selectedModelData?.nodeDetails || [];
   const hasMessages = messages.length > 0;
 
   return (
@@ -741,7 +747,7 @@ export default function Chat() {
       <div className="w-80 lg:w-96 flex-shrink-0 hidden md:block">
         <InferenceBackendPanel 
           model={selectedModel}
-          nodes={selectedModelNodes.length > 0 ? selectedModelNodes : allNodes}
+          nodeDetails={selectedModelNodeDetails.length > 0 ? selectedModelNodeDetails : allNodeDetails}
           isStreaming={isStreaming}
           streamProgress={streamProgress}
         />

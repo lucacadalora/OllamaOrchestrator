@@ -136,7 +136,7 @@ export function useWebSocketChat(onStreamComplete?: (content: string, reasoning?
     wsRef.current = ws;
   }, []);
 
-  const sendMessage = useCallback((model: string, messages: Array<{ role: string; content: string }>) => {
+  const sendMessage = useCallback((model: string, messages: Array<{ role: string; content: string }>, options?: { think?: boolean }) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       // Fallback to HTTP if WebSocket not connected
       return null;
@@ -151,7 +151,8 @@ export function useWebSocketChat(onStreamComplete?: (content: string, reasoning?
     wsRef.current.send(JSON.stringify({
       type: "inference_request",
       model,
-      messages
+      messages,
+      options
     }));
 
     return true; // Indicate WebSocket was used

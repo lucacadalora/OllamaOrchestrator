@@ -1,10 +1,20 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
-import { Bot, Send, User, Cpu, Loader2, Wifi, WifiOff } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { 
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { 
+  Bot, Send, User, Loader2, Wifi, WifiOff, Brain, 
+  Copy, RefreshCw, ChevronDown, ChevronUp, Image, Paperclip,
+  Globe, Layers, Check
+} from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -12,7 +22,6 @@ import { useWebSocketChat } from "@/hooks/useWebSocketChat";
 import { MessageContent } from "@/components/MessageContent";
 import { StreamingMessage } from "@/components/StreamingMessage";
 import { ReasoningDisplay } from "@/components/ReasoningDisplay";
-import { TypingIndicator } from "@/components/TypingIndicator";
 
 interface Message {
   id: string;
@@ -21,6 +30,7 @@ interface Message {
   reasoning?: string;
   timestamp: Date;
   nodeId?: string;
+  thinkingTime?: number;
 }
 
 interface Model {
@@ -33,22 +43,241 @@ interface ModelsResponse {
   models: Model[];
 }
 
+const hashCode = (str: string): number => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash);
+};
+
+function WorldMapVisualization({ nodes }: { nodes: string[] }) {
+  const nodeLocations = nodes.map((nodeId, idx) => {
+    const hash = hashCode(nodeId);
+    return {
+      id: nodeId,
+      x: 15 + ((hash % 70) + idx * 7) % 70,
+      y: 20 + ((hash % 35) + idx * 5) % 35,
+    };
+  });
+
+  return (
+    <div className="relative w-full h-48 bg-gradient-to-b from-slate-900/50 to-slate-800/30 rounded-xl overflow-hidden">
+      <svg viewBox="0 0 100 60" className="w-full h-full opacity-30">
+        <g fill="none" stroke="#64748b" strokeWidth="0.15">
+          <ellipse cx="50" cy="30" rx="35" ry="20" />
+          <ellipse cx="30" cy="25" rx="12" ry="10" />
+          <ellipse cx="70" cy="28" rx="14" ry="12" />
+          <ellipse cx="45" cy="40" rx="8" ry="6" />
+          <ellipse cx="25" cy="35" rx="6" ry="4" />
+          <ellipse cx="75" cy="22" rx="5" ry="4" />
+        </g>
+      </svg>
+      
+      <svg viewBox="0 0 100 60" className="absolute inset-0 w-full h-full">
+        {nodeLocations.map((node, idx) => (
+          <g key={node.id}>
+            {idx > 0 && nodeLocations[idx - 1] && (
+              <line
+                x1={nodeLocations[idx - 1].x}
+                y1={nodeLocations[idx - 1].y}
+                x2={node.x}
+                y2={node.y}
+                stroke="#05aa6c"
+                strokeWidth="0.3"
+                strokeDasharray="1,1"
+                opacity="0.5"
+              />
+            )}
+            <circle
+              cx={node.x}
+              cy={node.y}
+              r="1.5"
+              fill="#05aa6c"
+              className="animate-pulse"
+            />
+            <circle
+              cx={node.x}
+              cy={node.y}
+              r="3"
+              fill="none"
+              stroke="#05aa6c"
+              strokeWidth="0.3"
+              opacity="0.4"
+            />
+          </g>
+        ))}
+      </svg>
+      
+      <div className="absolute bottom-3 left-3 flex items-center gap-2 text-xs text-slate-400">
+        <Globe className="w-3 h-3" />
+        <span>{nodes.length} active nodes</span>
+      </div>
+    </div>
+  );
+}
+
+function InferenceJobsPanel({ nodes, isExpanded, onToggle }: { 
+  nodes: string[]; 
+  isExpanded: boolean; 
+  onToggle: () => void;
+}) {
+  return (
+    <div className="w-full max-w-2xl mx-auto">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-4 py-2 text-sm text-muted-foreground hover:bg-muted/50 rounded-lg transition-colors"
+        data-testid="toggle-inference-jobs"
+      >
+        <div className="flex items-center gap-2">
+          <Layers className="w-4 h-4" />
+          <span>Inference Jobs</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs">{nodes.length} Active</span>
+          {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </div>
+      </button>
+      
+      {isExpanded && (
+        <div className="mt-4 space-y-4">
+          <WorldMapVisualization nodes={nodes} />
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-muted/30 rounded-lg p-3">
+              <div className="text-2xl font-semibold text-foreground">{nodes.length}</div>
+              <div className="text-xs text-muted-foreground">Workers Online</div>
+            </div>
+            <div className="bg-muted/30 rounded-lg p-3">
+              <div className="text-2xl font-semibold text-foreground">{nodes.length * 72}</div>
+              <div className="text-xs text-muted-foreground">Layers Distributed</div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AssistantMessage({ 
+  message, 
+  isStreaming, 
+  currentResponse, 
+  currentReasoning,
+  isCurrentMessage,
+  httpStreamingMessageId
+}: { 
+  message: Message;
+  isStreaming: boolean;
+  currentResponse: string;
+  currentReasoning: string;
+  isCurrentMessage: boolean;
+  httpStreamingMessageId: string | null;
+}) {
+  const [copied, setCopied] = useState(false);
+  
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy:', error);
+    }
+  };
+
+  const showReasoning = message.reasoning || (isCurrentMessage && currentReasoning);
+  const reasoningContent = isCurrentMessage ? currentReasoning : message.reasoning;
+  const displayThinkingTime = message.thinkingTime ? `${message.thinkingTime.toFixed(1)}s` : null;
+
+  return (
+    <div className="flex gap-3" data-testid={`message-assistant-${message.id}`}>
+      <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
+        <Bot className="w-5 h-5 text-emerald-500" />
+      </div>
+      <div className="flex-1 space-y-2">
+        {showReasoning && (
+          <ReasoningDisplay
+            reasoning={reasoningContent || ""}
+            isStreaming={isStreaming && isCurrentMessage && !!currentReasoning}
+          />
+        )}
+        
+        <div className="bg-muted rounded-xl px-4 py-3">
+          <StreamingMessage 
+            content={message.content} 
+            isStreaming={(isStreaming && isCurrentMessage) || (message.id === httpStreamingMessageId)}
+            isWaitingForResponse={!message.content && (isCurrentMessage || message.id === httpStreamingMessageId)}
+            className="text-sm" 
+          />
+        </div>
+        
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {displayThinkingTime && (
+            <span className="flex items-center gap-1">
+              <Brain className="w-3 h-3" />
+              Thought for {displayThinkingTime}
+            </span>
+          )}
+          
+          <div className="flex items-center gap-1 ml-auto">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={handleCopy}
+              data-testid={`copy-message-${message.id}`}
+            >
+              {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+              <span className="ml-1">{copied ? 'Copied' : 'Copy'}</span>
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UserMessage({ message }: { message: Message }) {
+  return (
+    <div className="flex gap-3 justify-end" data-testid={`message-user-${message.id}`}>
+      <div className="max-w-[70%] bg-emerald-600 text-white rounded-xl px-4 py-3">
+        <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+      </div>
+      <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
+        <User className="w-5 h-5 text-muted-foreground" />
+      </div>
+    </div>
+  );
+}
+
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [httpStreamingMessageId, setHttpStreamingMessageId] = useState<string | null>(null);
+  const [thinkingEnabled, setThinkingEnabled] = useState(true);
+  const [showInferenceJobs, setShowInferenceJobs] = useState(true);
   const { toast } = useToast();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const lastAssistantMessageIdRef = useRef<string | null>(null);
+  const messageStartTimesRef = useRef<Map<string, number>>(new Map());
 
   const handleStreamComplete = useCallback((finalContent: string, finalReasoning?: string) => {
     if (lastAssistantMessageIdRef.current) {
+      const messageId = lastAssistantMessageIdRef.current;
+      const startTime = messageStartTimesRef.current.get(messageId);
+      const thinkingTime = startTime ? (Date.now() - startTime) / 1000 : undefined;
+      
       setMessages(prev => prev.map(msg =>
-        msg.id === lastAssistantMessageIdRef.current
-          ? { ...msg, content: finalContent, reasoning: finalReasoning }
+        msg.id === messageId
+          ? { ...msg, content: finalContent, reasoning: finalReasoning, thinkingTime }
           : msg
       ));
+      
+      messageStartTimesRef.current.delete(messageId);
     }
     setTimeout(() => {
       lastAssistantMessageIdRef.current = null;
@@ -57,25 +286,20 @@ export default function Chat() {
 
   const { isConnected, sendMessage: sendWebSocketMessage, currentResponse, currentReasoning, isStreaming } = useWebSocketChat(handleStreamComplete);
 
-  // Fetch available models
   const { data: modelsData, isLoading: loadingModels } = useQuery<ModelsResponse>({
     queryKey: ["/api/v1/models"],
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: 10000,
   });
 
-  // Set default model when data loads
   useEffect(() => {
     if (modelsData?.models && modelsData.models.length > 0 && !selectedModel) {
       setSelectedModel(modelsData.models[0].model);
     }
   }, [modelsData, selectedModel]);
 
-  // Poll for streaming response
   const pollForResponse = async (requestId: string, messageId: string) => {
-    const maxAttempts = 600; // 5 minutes (600 * 500ms)
+    const maxAttempts = 600;
     let attempts = 0;
-    
-    // Set streaming state for HTTP
     setHttpStreamingMessageId(messageId);
     
     while (attempts < maxAttempts) {
@@ -84,7 +308,6 @@ export default function Chat() {
         const data = await response.json();
         
         if (data.response) {
-          // Update message with current response
           setMessages(prev => prev.map(msg =>
             msg.id === messageId
               ? { ...msg, content: data.response, nodeId: data.nodeId }
@@ -93,8 +316,15 @@ export default function Chat() {
         }
         
         if (data.done) {
-          // Clear streaming state
+          const startTime = messageStartTimesRef.current.get(messageId);
+          const thinkingTime = startTime ? (Date.now() - startTime) / 1000 : undefined;
+          setMessages(prev => prev.map(msg =>
+            msg.id === messageId
+              ? { ...msg, thinkingTime }
+              : msg
+          ));
           setHttpStreamingMessageId(null);
+          messageStartTimesRef.current.delete(messageId);
           
           if (data.error) {
             toast({
@@ -106,7 +336,6 @@ export default function Chat() {
           break;
         }
         
-        // Wait before next poll
         await new Promise(resolve => setTimeout(resolve, 500));
         attempts++;
       } catch (error) {
@@ -117,7 +346,6 @@ export default function Chat() {
     }
   };
 
-  // Send message mutation
   const sendMutation = useMutation({
     mutationFn: async (message: string) => {
       const response = await apiRequest("POST", "/api/v1/inference/chat", {
@@ -126,11 +354,13 @@ export default function Chat() {
           ...messages.map(m => ({ role: m.role, content: m.content })),
           { role: "user", content: message }
         ],
+        options: {
+          think: thinkingEnabled
+        }
       });
       return response.json();
     },
     onSuccess: async (data) => {
-      // Add placeholder assistant message
       const assistantMessageId = `msg-${Date.now()}-assistant`;
       const assistantMessage: Message = {
         id: assistantMessageId,
@@ -140,7 +370,6 @@ export default function Chat() {
       };
       setMessages(prev => [...prev, assistantMessage]);
       
-      // Start polling for streaming response
       if (data.requestId) {
         await pollForResponse(data.requestId, assistantMessageId);
       }
@@ -154,10 +383,23 @@ export default function Chat() {
     },
   });
 
+  const handleFileUpload = () => {
+    toast({
+      title: "Coming Soon",
+      description: "File upload will be available in a future update",
+    });
+  };
+
+  const handleImageUpload = () => {
+    toast({
+      title: "Coming Soon", 
+      description: "Image upload will be available in a future update",
+    });
+  };
+
   const handleSend = () => {
     if (!input.trim() || !selectedModel) return;
 
-    // Add user message
     const userMessage: Message = {
       id: `msg-${Date.now()}-user`,
       role: "user",
@@ -166,16 +408,16 @@ export default function Chat() {
     };
     setMessages(prev => [...prev, userMessage]);
     
-    // Try WebSocket first, fall back to HTTP if not connected
     const allMessages = [...messages.map(m => ({ role: m.role, content: m.content })), { role: "user", content: input.trim() }];
-    const sentViaWebSocket = sendWebSocketMessage(selectedModel, allMessages);
+    const sentViaWebSocket = sendWebSocketMessage(selectedModel, allMessages, { think: thinkingEnabled });
     
     if (!sentViaWebSocket) {
-      // Fallback to HTTP polling
+      const assistantMsgId = `msg-${Date.now()}-assistant`;
+      messageStartTimesRef.current.set(assistantMsgId, Date.now());
       sendMutation.mutate(input.trim());
     } else {
-      // Add placeholder for WebSocket streaming
       const assistantMessageId = `msg-${Date.now()}-assistant`;
+      messageStartTimesRef.current.set(assistantMessageId, Date.now());
       lastAssistantMessageIdRef.current = assistantMessageId;
       const assistantMessage: Message = {
         id: assistantMessageId,
@@ -186,11 +428,9 @@ export default function Chat() {
       setMessages(prev => [...prev, assistantMessage]);
     }
     
-    // Clear input
     setInput("");
   };
 
-  // Update tracked assistant message when WebSocket streams
   useEffect(() => {
     if ((currentResponse || currentReasoning) && lastAssistantMessageIdRef.current) {
       setMessages(prev => prev.map(msg =>
@@ -201,10 +441,8 @@ export default function Chat() {
     }
   }, [currentResponse, currentReasoning]);
 
-  // Auto scroll to bottom with smooth animation
   useEffect(() => {
     if (scrollAreaRef.current) {
-      // Use requestAnimationFrame for smoother scrolling
       requestAnimationFrame(() => {
         if (scrollAreaRef.current) {
           scrollAreaRef.current.scrollTo({
@@ -217,222 +455,196 @@ export default function Chat() {
   }, [messages, currentResponse]);
 
   const models = modelsData?.models || [];
+  const allNodes = models.flatMap(m => m.nodes);
+  const hasMessages = messages.length > 0;
+
+  const suggestions = [
+    "Explain quantum computing in simple terms",
+    "Write a Python function to sort a list",
+    "What are the benefits of distributed AI?",
+    "Help me debug my code"
+  ];
 
   return (
-    <div className="flex flex-col lg:flex-row h-full min-h-screen" data-testid="chat-page">
-      {/* Sidebar - Model Selection */}
-      <div className="w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-border bg-card overflow-y-auto max-h-[40vh] lg:max-h-none lg:h-full">
-        <div className="p-4">
-          <h3 className="text-lg font-semibold mb-4">Available Models</h3>
-          
-          {loadingModels ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : models.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-sm text-muted-foreground">No models available</p>
-              <p className="text-xs text-muted-foreground mt-2">
-                Connect nodes with Ollama to enable chat
-              </p>
+    <div className="flex flex-col h-full min-h-screen bg-background" data-testid="chat-page">
+      <header className="border-b border-border px-6 py-3 flex items-center justify-between bg-card/50">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center">
+            <span className="text-white font-bold text-sm">G</span>
+          </div>
+          <h1 className="text-lg font-semibold">Gradient Chat</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          {isConnected ? (
+            <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
+              <Wifi className="w-3 h-3 mr-1" />
+              Connected
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-muted-foreground">
+              <WifiOff className="w-3 h-3 mr-1" />
+              Offline
+            </Badge>
+          )}
+        </div>
+      </header>
+
+      <div className="flex-1 overflow-hidden flex flex-col">
+        <ScrollArea className="flex-1 p-6" ref={scrollAreaRef}>
+          {!hasMessages ? (
+            <div className="max-w-2xl mx-auto pt-16 pb-8">
+              <div className="text-center mb-12">
+                <h2 className="text-4xl font-bold mb-3 bg-gradient-to-r from-emerald-400 to-teal-500 bg-clip-text text-transparent">
+                  Welcome to Gradient.
+                </h2>
+                <p className="text-muted-foreground">
+                  Distributed AI inference across a global network of nodes
+                </p>
+              </div>
+
+              <InferenceJobsPanel 
+                nodes={allNodes}
+                isExpanded={showInferenceJobs}
+                onToggle={() => setShowInferenceJobs(!showInferenceJobs)}
+              />
+
+              <div className="mt-8">
+                <p className="text-sm text-muted-foreground mb-3">Try asking:</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {suggestions.map((suggestion, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setInput(suggestion)}
+                      className="text-left px-4 py-3 rounded-lg border border-border hover:bg-muted/50 transition-colors text-sm text-muted-foreground hover:text-foreground"
+                      data-testid={`suggestion-${idx}`}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           ) : (
-            <div className="space-y-2">
-              {models.map((model) => (
-                <Card
-                  key={model.model}
-                  className={`cursor-pointer transition-colors ${
-                    selectedModel === model.model
-                      ? "border-primary bg-primary/5"
-                      : "hover:bg-muted/50"
-                  }`}
-                  onClick={() => setSelectedModel(model.model)}
-                >
-                  <CardContent className="p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <Bot className="w-4 h-4 text-primary" />
-                        <span className="font-medium">{model.model}</span>
-                      </div>
-                      <Badge variant="secondary">
-                        {model.nodeCount} node{model.nodeCount !== 1 ? "s" : ""}
-                      </Badge>
-                    </div>
-                    <div className="mt-2">
-                      <p className="text-xs text-muted-foreground">
-                        Available on: {model.nodes.slice(0, 2).join(", ")}
-                        {model.nodes.length > 2 && ` +${model.nodes.length - 2} more`}
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
+            <div className="space-y-6 max-w-3xl mx-auto pb-4">
+              {messages.map((message) => (
+                message.role === "user" ? (
+                  <UserMessage key={message.id} message={message} />
+                ) : (
+                  <AssistantMessage 
+                    key={message.id}
+                    message={message}
+                    isStreaming={isStreaming}
+                    currentResponse={currentResponse}
+                    currentReasoning={currentReasoning}
+                    isCurrentMessage={message.id === lastAssistantMessageIdRef.current}
+                    httpStreamingMessageId={httpStreamingMessageId}
+                  />
+                )
               ))}
             </div>
           )}
-        </div>
-      </div>
+        </ScrollArea>
 
-      {/* Chat Area */}
-      <div className="flex-1 flex flex-col">
-        {/* Header */}
-        <header className="bg-card border-b border-border px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-2xl font-semibold">AI Chat</h2>
-              <p className="text-muted-foreground">
-                {selectedModel ? (
-                  <span className="flex items-center gap-2">
-                    Using <Badge variant="outline">{selectedModel}</Badge>
-                    on distributed nodes
-                    {isConnected ? (
-                      <Badge variant="default" className="bg-green-600">
-                        <Wifi className="w-3 h-3 mr-1" />
-                        WebSocket
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary">
-                        <WifiOff className="w-3 h-3 mr-1" />
-                        HTTP Polling
-                      </Badge>
-                    )}
-                  </span>
-                ) : (
-                  "Select a model to start chatting"
-                )}
-              </p>
-            </div>
-            {messages.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setMessages([])}
-              >
-                Clear Chat
-              </Button>
-            )}
-          </div>
-        </header>
+        <div className="border-t border-border bg-card/50 p-4">
+          <div className="max-w-3xl mx-auto">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={thinkingEnabled}
+                  onCheckedChange={setThinkingEnabled}
+                  id="thinking-toggle"
+                  data-testid="thinking-toggle"
+                />
+                <label htmlFor="thinking-toggle" className="text-sm text-muted-foreground flex items-center gap-1">
+                  <Brain className="w-4 h-4" />
+                  Thinking
+                </label>
+              </div>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-hidden">
-          <ScrollArea className="h-full p-6 smooth-scroll" ref={scrollAreaRef}>
-            {messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <Bot className="w-12 h-12 text-muted-foreground mb-4" />
-              <h3 className="text-lg font-medium mb-2">Start a conversation</h3>
-              <p className="text-sm text-muted-foreground max-w-md">
-                Select a model and send a message to begin. Your requests will be
-                routed to available nodes running Ollama.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4 max-w-3xl mx-auto">
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex gap-3 ${
-                    message.role === "user" ? "justify-end" : ""
-                  }`}
+              <Select value={selectedModel || ""} onValueChange={setSelectedModel}>
+                <SelectTrigger className="w-48 h-8 text-sm" data-testid="model-select">
+                  <SelectValue placeholder={loadingModels ? "Loading..." : "Select model"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {models.map((model) => (
+                    <SelectItem key={model.model} value={model.model}>
+                      <div className="flex items-center gap-2">
+                        <span>{model.model}</span>
+                        <Badge variant="secondary" className="text-xs">
+                          {model.nodeCount} nodes
+                        </Badge>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              {messages.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setMessages([])}
+                  className="ml-auto text-xs"
+                  data-testid="clear-chat"
                 >
-                  {message.role === "assistant" && (
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                      <Bot className="w-5 h-5 text-primary" />
-                    </div>
-                  )}
-                  <div className={`max-w-[70%] ${message.role === "user" ? "" : "space-y-2"}`}>
-                    {message.role === "assistant" && message.reasoning && (
-                      <ReasoningDisplay
-                        reasoning={message.id === lastAssistantMessageIdRef.current ? currentReasoning : message.reasoning}
-                        isStreaming={isStreaming && message.id === lastAssistantMessageIdRef.current && !!currentReasoning}
-                      />
-                    )}
-                    {message.role === "assistant" && isStreaming && message.id === lastAssistantMessageIdRef.current && currentReasoning && !message.reasoning && (
-                      <ReasoningDisplay
-                        reasoning={currentReasoning}
-                        isStreaming={true}
-                      />
-                    )}
-                    <div
-                      className={`rounded-lg px-4 py-2 ${
-                        message.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted"
-                      }`}
-                    >
-                      {message.role === "user" ? (
-                        <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                      ) : (
-                        <StreamingMessage 
-                          content={message.content} 
-                          isStreaming={(isStreaming && message.id === lastAssistantMessageIdRef.current) || (message.id === httpStreamingMessageId)}
-                          isWaitingForResponse={!message.content && (message.id === lastAssistantMessageIdRef.current || message.id === httpStreamingMessageId)}
-                          className="text-sm" 
-                        />
-                      )}
-                      {message.nodeId && (
-                        <div className="flex items-center gap-1 mt-2 pt-2 border-t border-border/20">
-                          <Cpu className="w-3 h-3" />
-                          <span className="text-xs opacity-70">
-                            Node: {message.nodeId}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  {message.role === "user" && (
-                    <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
-                      <User className="w-5 h-5 text-muted-foreground" />
-                    </div>
-                  )}
-                </div>
-              ))}
-              {sendMutation.isPending && (
-                <div className="flex gap-3">
-                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                    <Bot className="w-5 h-5 text-primary" />
-                  </div>
-                  <div className="rounded-lg px-4 py-2 bg-muted">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  </div>
-                </div>
+                  Clear
+                </Button>
               )}
             </div>
-          )}
-          </ScrollArea>
-        </div>
 
-        {/* Input Area */}
-        <div className="border-t border-border bg-card p-4">
-          <div className="max-w-3xl mx-auto">
-            <div className="flex gap-2">
-              <input
-                type="text"
+            <div className="flex items-end gap-2 bg-muted/30 rounded-xl p-2 border border-border">
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="h-9 w-9 text-muted-foreground shrink-0"
+                onClick={handleFileUpload}
+                data-testid="file-upload-button"
+              >
+                <Paperclip className="w-4 h-4" />
+              </Button>
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="h-9 w-9 text-muted-foreground shrink-0"
+                onClick={handleImageUpload}
+                data-testid="image-upload-button"
+              >
+                <Image className="w-4 h-4" />
+              </Button>
+              
+              <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onKeyPress={(e) => e.key === "Enter" && handleSend()}
-                placeholder={
-                  selectedModel
-                    ? "Type your message..."
-                    : "Select a model first..."
-                }
-                disabled={!selectedModel || sendMutation.isPending}
-                className="flex-1 px-4 py-2 border border-border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder={selectedModel ? "Message Gradient..." : "Select a model first..."}
+                disabled={!selectedModel || sendMutation.isPending || httpStreamingMessageId !== null}
+                className="flex-1 bg-transparent resize-none border-0 focus:outline-none focus:ring-0 py-2 px-2 text-sm min-h-[40px] max-h-32"
+                rows={1}
                 data-testid="chat-input"
               />
+              
               <Button
                 onClick={handleSend}
-                disabled={!selectedModel || !input.trim() || sendMutation.isPending}
+                disabled={!selectedModel || !input.trim() || sendMutation.isPending || isStreaming || httpStreamingMessageId !== null}
+                className="h-9 w-9 shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white"
+                size="icon"
                 data-testid="send-button"
               >
-                {sendMutation.isPending ? (
+                {sendMutation.isPending || isStreaming ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <Send className="w-4 h-4" />
                 )}
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground mt-2">
-              Messages are routed to nodes running Ollama. Each request generates a receipt for tracking.
+            
+            <p className="text-xs text-muted-foreground mt-2 text-center">
+              Powered by distributed inference across {allNodes.length} nodes
             </p>
           </div>
         </div>

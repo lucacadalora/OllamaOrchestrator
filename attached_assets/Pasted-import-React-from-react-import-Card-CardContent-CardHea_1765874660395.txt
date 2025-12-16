@@ -1,0 +1,181 @@
+import React from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Activity, Cpu, Gauge, MapPin } from 'lucide-react';
+
+interface ModelNode {
+  id: string;
+  location: string;
+  gpu: string;
+  status: 'online' | 'offline' | 'busy';
+  load: number;
+}
+
+interface ModelCardProps {
+  name: string;
+  size: string;
+  nodes: ModelNode[];
+  onSelect: () => void;
+  isSelected: boolean;
+}
+
+export function ModelSelectionCard({ name, size, nodes, onSelect, isSelected }: ModelCardProps) {
+  const activeNodes = nodes.filter(n => n.status === 'online').length;
+  const avgLoad = nodes.reduce((acc, n) => acc + n.load, 0) / nodes.length;
+
+  return (
+    <Card 
+      className={`cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02] ${
+        isSelected ? 'ring-2 ring-blue-500 shadow-lg' : ''
+      }`}
+      onClick={onSelect}
+    >
+      <CardHeader>
+        <div className="flex items-start justify-between">
+          <div>
+            <CardTitle className="text-xl font-bold">{name}</CardTitle>
+            <p className="text-sm text-muted-foreground mt-1">{size}</p>
+          </div>
+          <Badge variant={activeNodes > 0 ? "default" : "secondary"}>
+            {activeNodes} / {nodes.length} nodes
+          </Badge>
+        </div>
+      </CardHeader>
+      
+      <CardContent className="space-y-4">
+        {/* Status Indicators */}
+        <div className="grid grid-cols-3 gap-3">
+          <div className="flex items-center gap-2 text-sm">
+            <Activity className="h-4 w-4 text-green-500" />
+            <span className="text-muted-foreground">Active</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <Gauge className={`h-4 w-4 ${avgLoad > 70 ? 'text-red-500' : 'text-blue-500'}`} />
+            <span className="text-muted-foreground">{avgLoad.toFixed(0)}% load</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <Cpu className="h-4 w-4 text-purple-500" />
+            <span className="text-muted-foreground">{activeNodes} GPUs</span>
+          </div>
+        </div>
+
+        {/* Visual Distribution */}
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground font-medium">Node Distribution</p>
+          <div className="flex gap-1 h-2">
+            {nodes.map((node, idx) => (
+              <div
+                key={node.id}
+                className={`flex-1 rounded-full transition-all ${
+                  node.status === 'online' 
+                    ? 'bg-green-500' 
+                    : node.status === 'busy'
+                    ? 'bg-yellow-500'
+                    : 'bg-gray-300'
+                }`}
+                title={`${node.location} - ${node.gpu}`}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Node Details */}
+        <div className="space-y-1.5">
+          {nodes.slice(0, 3).map((node) => (
+            <div 
+              key={node.id}
+              className="flex items-center justify-between text-xs p-2 bg-muted/50 rounded"
+            >
+              <div className="flex items-center gap-2">
+                <div className={`h-2 w-2 rounded-full ${
+                  node.status === 'online' ? 'bg-green-500' : 'bg-gray-300'
+                }`} />
+                <MapPin className="h-3 w-3 text-muted-foreground" />
+                <span className="text-muted-foreground">{node.location}</span>
+              </div>
+              <span className="font-medium">{node.gpu}</span>
+            </div>
+          ))}
+          {nodes.length > 3 && (
+            <p className="text-xs text-muted-foreground text-center">
+              +{nodes.length - 3} more nodes
+            </p>
+          )}
+        </div>
+
+        {/* Performance Indicator */}
+        <div className="pt-2 border-t">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">Est. latency</span>
+            <span className="font-medium">~{Math.round(50 + avgLoad)}ms/token</span>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Example usage component
+export function ModelSelectionGrid() {
+  const [selectedModel, setSelectedModel] = React.useState<string | null>(null);
+
+  const models = [
+    {
+      id: 'qwen-72b',
+      name: 'Qwen 2.5 72B',
+      size: '72B parameters',
+      nodes: [
+        { id: '1', location: 'Jakarta', gpu: 'RTX 4090 24GB', status: 'online' as const, load: 45 },
+        { id: '2', location: 'Bandung', gpu: 'RTX 4090 24GB', status: 'online' as const, load: 60 },
+        { id: '3', location: 'Surabaya', gpu: 'RTX 3090 24GB', status: 'online' as const, load: 55 },
+        { id: '4', location: 'Singapore', gpu: 'A100 80GB', status: 'busy' as const, load: 85 },
+      ]
+    },
+    {
+      id: 'llama-70b',
+      name: 'Llama 3.1 70B',
+      size: '70B parameters',
+      nodes: [
+        { id: '5', location: 'Jakarta', gpu: 'RTX 4090 24GB', status: 'online' as const, load: 30 },
+        { id: '6', location: 'Cikarang', gpu: 'RTX 4090 24GB', status: 'online' as const, load: 40 },
+      ]
+    },
+  ];
+
+  return (
+    <div className="p-6">
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold mb-2">Select a Model</h2>
+        <p className="text-muted-foreground">
+          Choose from available models distributed across the DGON network
+        </p>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {models.map((model) => (
+          <ModelSelectionCard
+            key={model.id}
+            name={model.name}
+            size={model.size}
+            nodes={model.nodes}
+            onSelect={() => setSelectedModel(model.id)}
+            isSelected={selectedModel === model.id}
+          />
+        ))}
+      </div>
+
+      {models.length === 0 && (
+        <div className="text-center py-12">
+          <Cpu className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+          <h3 className="text-lg font-semibold mb-2">No Models Available</h3>
+          <p className="text-muted-foreground mb-4">
+            Connect nodes with Ollama to enable chat
+          </p>
+          <button className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90">
+            Run a Node
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

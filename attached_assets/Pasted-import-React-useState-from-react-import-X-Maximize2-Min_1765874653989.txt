@@ -1,0 +1,317 @@
+import React, { useState } from 'react';
+import { X, Maximize2, Minimize2 } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+
+interface WorkerNode {
+  id: string;
+  gpu: string;
+  location: string;
+  status: 'completed' | 'processing' | 'idle' | 'offline';
+  blocksServed: number;
+  layerStart: number;
+  layerEnd: number;
+  totalLayers: number;
+}
+
+interface InferenceBackendProps {
+  modelName: string;
+  totalWorkers: number;
+  workers: WorkerNode[];
+  isOpen?: boolean;
+  onClose?: () => void;
+}
+
+export function InferenceBackendPanel({ 
+  modelName, 
+  totalWorkers, 
+  workers,
+  isOpen = false,
+  onClose 
+}: InferenceBackendProps) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  if (!isOpen) return null;
+
+  const activeWorkers = workers.filter(w => w.status !== 'offline').length;
+  const completedWorkers = workers.filter(w => w.status === 'completed').length;
+
+  return (
+    <div className={`fixed right-4 top-4 bg-white rounded-xl shadow-2xl border border-gray-200 transition-all z-50 ${
+      isExpanded ? 'w-[600px]' : 'w-[420px]'
+    }`}>
+      {/* Header */}
+      <div className="flex items-center justify-between p-4 border-b">
+        <h3 className="font-semibold text-lg">Inference Backend</h3>
+        <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setIsExpanded(!isExpanded)}
+          >
+            {isExpanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="p-4 max-h-[calc(100vh-120px)] overflow-y-auto">
+        {/* Model Info Section */}
+        <div className="space-y-4 mb-6">
+          <div>
+            <h4 className="text-sm font-medium text-gray-500 mb-1">Model</h4>
+            <p className="text-lg font-semibold text-green-600">{modelName}</p>
+          </div>
+
+          {/* Distribution Visualization */}
+          <div>
+            <h4 className="text-sm font-medium text-gray-500 mb-2">Distribution</h4>
+            <DistributionDiagram workers={workers} />
+          </div>
+
+          <div>
+            <h4 className="text-sm font-medium text-gray-500 mb-1">Workers</h4>
+            <p className="text-2xl font-bold">{totalWorkers}</p>
+          </div>
+        </div>
+
+        {/* Worker Status */}
+        <div className="mb-6">
+          <h4 className="text-sm font-medium text-gray-500 mb-3">Worker Status</h4>
+          <Badge variant="secondary" className="gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-green-500" />
+            Completed ({completedWorkers}/{totalWorkers})
+          </Badge>
+        </div>
+
+        {/* Worker Details */}
+        <div className="space-y-3">
+          {workers.map((worker) => (
+            <WorkerCard key={worker.id} worker={worker} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkerCard({ worker }: { worker: WorkerNode }) {
+  const statusColors = {
+    completed: 'text-green-600',
+    processing: 'text-blue-600',
+    idle: 'text-gray-400',
+    offline: 'text-red-600',
+  };
+
+  const statusLabels = {
+    completed: 'Completed',
+    processing: 'Processing',
+    idle: 'Idle',
+    offline: 'Offline',
+  };
+
+  return (
+    <div className="space-y-2">
+      {/* Worker Header */}
+      <div className="flex items-center justify-between text-sm">
+        <span className="font-medium">{worker.gpu}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-gray-500">{worker.location}</span>
+          <span className={`font-medium ${statusColors[worker.status]}`}>
+            {statusLabels[worker.status]}
+          </span>
+        </div>
+      </div>
+
+      {/* Layer Distribution Visualization */}
+      <LayerDistributionBar worker={worker} />
+
+      {/* Blocks Served */}
+      <div className="text-center text-xs text-gray-500">
+        served {worker.blocksServed.toLocaleString()} blocks
+      </div>
+    </div>
+  );
+}
+
+function LayerDistributionBar({ worker }: { worker: WorkerNode }) {
+  const { layerStart, layerEnd, totalLayers, status } = worker;
+  const startPercent = (layerStart / totalLayers) * 100;
+  const widthPercent = ((layerEnd - layerStart) / totalLayers) * 100;
+
+  const statusColors = {
+    completed: 'bg-green-500',
+    processing: 'bg-blue-500 animate-pulse',
+    idle: 'bg-gray-300',
+    offline: 'bg-red-300',
+  };
+
+  return (
+    <div className="relative h-6 bg-gray-100 rounded overflow-hidden">
+      {/* Empty blocks (gray) */}
+      <div className="absolute inset-0 flex">
+        {Array.from({ length: totalLayers }).map((_, idx) => (
+          <div
+            key={idx}
+            className="flex-1 border-r border-white last:border-r-0"
+          />
+        ))}
+      </div>
+
+      {/* Active layer blocks */}
+      <div
+        className={`absolute h-full ${statusColors[status]} transition-all`}
+        style={{
+          left: `${startPercent}%`,
+          width: `${widthPercent}%`,
+        }}
+      >
+        <div className="absolute inset-0 flex">
+          {Array.from({ length: layerEnd - layerStart }).map((_, idx) => (
+            <div
+              key={idx}
+              className="flex-1 border-r border-white/20 last:border-r-0"
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DistributionDiagram({ workers }: { workers: WorkerNode[] }) {
+  return (
+    <div className="relative h-32 flex items-center justify-center">
+      {/* Dots pattern representing distributed nodes */}
+      <svg viewBox="0 0 200 100" className="w-full h-full">
+        {/* Create a pattern of dots */}
+        <defs>
+          <pattern id="dots" x="0" y="0" width="10" height="10" patternUnits="userSpaceOnUse">
+            <circle cx="5" cy="5" r="1.5" fill="#e5e7eb" />
+          </pattern>
+        </defs>
+        
+        {/* Background dots */}
+        <rect width="200" height="100" fill="url(#dots)" />
+        
+        {/* Highlighted cluster representing active workers */}
+        {workers.map((worker, idx) => {
+          const activeColor = worker.status === 'completed' ? '#22c55e' : 
+                            worker.status === 'processing' ? '#3b82f6' : '#9ca3af';
+          
+          const x = 30 + (idx * 40);
+          const y = 20 + (idx % 2) * 30;
+          
+          return (
+            <g key={worker.id}>
+              {/* Connection lines */}
+              {idx > 0 && (
+                <line
+                  x1={30 + ((idx - 1) * 40)}
+                  y1={20 + ((idx - 1) % 2) * 30}
+                  x2={x}
+                  y2={y}
+                  stroke={activeColor}
+                  strokeWidth="1"
+                  opacity="0.3"
+                />
+              )}
+              
+              {/* Node circles */}
+              <circle
+                cx={x}
+                cy={y}
+                r="8"
+                fill={activeColor}
+                opacity="0.8"
+              />
+              <circle
+                cx={x}
+                cy={y}
+                r="4"
+                fill={activeColor}
+              />
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// Example usage component
+export function InferenceBackendDemo() {
+  const [isPanelOpen, setIsPanelOpen] = useState(true);
+
+  const mockWorkers: WorkerNode[] = [
+    {
+      id: '1',
+      gpu: 'RTX 4090 (24GB)',
+      location: 'Node 1',
+      status: 'completed',
+      blocksServed: 34425,
+      layerStart: 0,
+      layerEnd: 30,
+      totalLayers: 120,
+    },
+    {
+      id: '2',
+      gpu: 'RTX 4090 (24GB)',
+      location: 'Node 2',
+      status: 'completed',
+      blocksServed: 34425,
+      layerStart: 30,
+      layerEnd: 60,
+      totalLayers: 120,
+    },
+    {
+      id: '3',
+      gpu: 'RTX 4090 (24GB)',
+      location: 'Node 3',
+      status: 'processing',
+      blocksServed: 34425,
+      layerStart: 60,
+      layerEnd: 90,
+      totalLayers: 120,
+    },
+    {
+      id: '4',
+      gpu: 'RTX 4090 (24GB)',
+      location: 'Node 4',
+      status: 'completed',
+      blocksServed: 34425,
+      layerStart: 90,
+      layerEnd: 120,
+      totalLayers: 120,
+    },
+  ];
+
+  return (
+    <div>
+      <button
+        onClick={() => setIsPanelOpen(true)}
+        className="fixed right-4 top-4 px-4 py-2 bg-white border rounded-lg shadow-sm hover:shadow-md transition-shadow"
+      >
+        Show Inference Backend
+      </button>
+
+      <InferenceBackendPanel
+        modelName="GPT OSS 120B"
+        totalWorkers={4}
+        workers={mockWorkers}
+        isOpen={isPanelOpen}
+        onClose={() => setIsPanelOpen(false)}
+      />
+    </div>
+  );
+}

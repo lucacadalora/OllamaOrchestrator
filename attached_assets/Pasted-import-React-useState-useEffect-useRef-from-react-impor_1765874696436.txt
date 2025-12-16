@@ -1,0 +1,247 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Copy, RotateCcw, Sparkles } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+
+interface AnimatedMessageProps {
+  content: string;
+  role: 'user' | 'assistant';
+  isStreaming?: boolean;
+  onCopy?: (text: string) => void;
+  onRegenerate?: () => void;
+  thinkingTime?: number;
+}
+
+export function AnimatedMessage({
+  content,
+  role,
+  isStreaming = false,
+  onCopy,
+  onRegenerate,
+  thinkingTime,
+}: AnimatedMessageProps) {
+  const [displayedContent, setDisplayedContent] = useState('');
+  const [isAnimating, setIsAnimating] = useState(isStreaming);
+  const animationFrameRef = useRef<number>();
+  const startTimeRef = useRef<number>();
+
+  useEffect(() => {
+    if (role === 'user') {
+      // User messages appear instantly
+      setDisplayedContent(content);
+      return;
+    }
+
+    if (isStreaming) {
+      // Streaming animation
+      setIsAnimating(true);
+      let index = 0;
+      const intervalSpeed = 20; // milliseconds per character
+
+      const animate = () => {
+        if (index < content.length) {
+          setDisplayedContent(content.slice(0, index + 1));
+          index++;
+          setTimeout(() => {
+            animationFrameRef.current = requestAnimationFrame(animate);
+          }, intervalSpeed);
+        } else {
+          setIsAnimating(false);
+        }
+      };
+
+      animationFrameRef.current = requestAnimationFrame(animate);
+
+      return () => {
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+        }
+      };
+    } else {
+      setDisplayedContent(content);
+    }
+  }, [content, isStreaming, role]);
+
+  const isUser = role === 'user';
+
+  return (
+    <div className={`flex gap-4 ${isUser ? 'justify-end' : 'justify-start'} group`}>
+      {!isUser && (
+        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-400 to-blue-500 flex items-center justify-center flex-shrink-0">
+          <Sparkles className="w-4 h-4 text-white" />
+        </div>
+      )}
+
+      <div className={`max-w-[80%] ${isUser ? 'order-first' : ''}`}>
+        <div
+          className={`rounded-2xl px-4 py-3 ${
+            isUser
+              ? 'bg-gray-900 text-white ml-auto'
+              : 'bg-gray-100 text-gray-900'
+          }`}
+        >
+          <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
+            {displayedContent}
+            {isAnimating && (
+              <span className="inline-block w-1 h-4 ml-1 bg-current animate-pulse" />
+            )}
+          </div>
+        </div>
+
+        {/* Action Buttons for Assistant Messages */}
+        {!isUser && !isAnimating && (
+          <div className="flex gap-2 mt-2 ml-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {thinkingTime && (
+              <span className="text-xs text-gray-400 self-center">
+                Thought for {thinkingTime.toFixed(1)}s
+              </span>
+            )}
+            {onCopy && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs hover:bg-gray-100"
+                onClick={() => onCopy(content)}
+              >
+                <Copy className="w-3.5 h-3.5 mr-1" />
+                Copy
+              </Button>
+            )}
+            {onRegenerate && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs hover:bg-gray-100"
+                onClick={onRegenerate}
+              >
+                <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                Regenerate
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {isUser && (
+        <div className="w-8 h-8 rounded-full bg-gray-900 flex items-center justify-center flex-shrink-0">
+          <span className="text-white text-sm font-medium">U</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Thinking indicator with animation
+export function ThinkingIndicator() {
+  return (
+    <div className="flex gap-4">
+      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-400 to-blue-500 flex items-center justify-center flex-shrink-0 animate-pulse">
+        <Sparkles className="w-4 h-4 text-white" />
+      </div>
+      <div className="bg-gray-100 rounded-2xl px-4 py-3">
+        <div className="flex gap-1.5">
+          <div
+            className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+            style={{ animationDelay: '0ms', animationDuration: '0.8s' }}
+          />
+          <div
+            className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+            style={{ animationDelay: '160ms', animationDuration: '0.8s' }}
+          />
+          <div
+            className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+            style={{ animationDelay: '320ms', animationDuration: '0.8s' }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Real-time streaming component
+export function StreamingMessage({ onChunk }: { onChunk?: (text: string) => void }) {
+  const [streamedContent, setStreamedContent] = useState('');
+  const [isComplete, setIsComplete] = useState(false);
+
+  // Simulate streaming (replace with actual SSE implementation)
+  useEffect(() => {
+    const words = [
+      'Hello!',
+      'I',
+      'can',
+      'help',
+      'you',
+      'with',
+      'various',
+      'tasks',
+      'today.',
+      'What',
+      'would',
+      'you',
+      'like',
+      'to',
+      'know?',
+    ];
+
+    let index = 0;
+    let accumulated = '';
+
+    const interval = setInterval(() => {
+      if (index < words.length) {
+        accumulated += (index > 0 ? ' ' : '') + words[index];
+        setStreamedContent(accumulated);
+        onChunk?.(accumulated);
+        index++;
+      } else {
+        setIsComplete(true);
+        clearInterval(interval);
+      }
+    }, 150);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <AnimatedMessage
+      content={streamedContent}
+      role="assistant"
+      isStreaming={!isComplete}
+    />
+  );
+}
+
+// Processing animation overlay
+export function ProcessingOverlay({ nodeId }: { nodeId?: string }) {
+  return (
+    <div className="fixed inset-0 pointer-events-none z-50">
+      <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-sm rounded-lg px-4 py-2 shadow-lg border border-gray-200">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <div className="w-3 h-3 bg-green-500 rounded-full animate-ping absolute" />
+            <div className="w-3 h-3 bg-green-500 rounded-full" />
+          </div>
+          <span className="text-sm font-medium text-gray-700">
+            Processing on {nodeId || 'distributed network'}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Animated gradient background during inference
+export function InferenceGlow() {
+  return (
+    <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
+      <div
+        className="absolute inset-0 opacity-30"
+        style={{
+          background: `
+            radial-gradient(circle at 20% 50%, rgba(34, 197, 94, 0.2) 0%, transparent 50%),
+            radial-gradient(circle at 80% 50%, rgba(59, 130, 246, 0.2) 0%, transparent 50%)
+          `,
+          animation: 'pulse 3s ease-in-out infinite',
+        }}
+      />
+    </div>
+  );
+}

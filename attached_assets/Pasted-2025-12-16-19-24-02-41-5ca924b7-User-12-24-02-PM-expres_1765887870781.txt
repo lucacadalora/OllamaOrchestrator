@@ -1,0 +1,252 @@
+2025-12-16 19:24:02.41
+5ca924b7
+User
+12:24:02 PM [express] POST /api/v1/inference/stream 200 in 185ms :: {"ok":true,"offset":120}
+2025-12-16 19:24:02.85
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=3
+2025-12-16 19:24:02.94
+5ca924b7
+User
+12:24:02 PM [express] POST /api/v1/inference/stream 200 in 190ms :: {"ok":true,"offset":123}
+2025-12-16 19:24:03.37
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=9
+2025-12-16 19:24:03.46
+5ca924b7
+User
+12:24:03 PM [express] POST /api/v1/inference/stream 200 in 188ms :: {"ok":true,"offset":132}
+2025-12-16 19:24:03.89
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=6
+2025-12-16 19:24:03.98
+5ca924b7
+User
+12:24:03 PM [express] POST /api/v1/inference/stream 200 in 185ms :: {"ok":true,"offset":138}
+2025-12-16 19:24:04.42
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=3
+2025-12-16 19:24:04.53
+5ca924b7
+User
+12:24:04 PM [express] POST /api/v1/inference/stream 200 in 208ms :: {"ok":true,"offset":141}
+2025-12-16 19:24:04.94
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=2
+2025-12-16 19:24:05.04
+5ca924b7
+User
+12:24:05 PM [express] POST /api/v1/inference/stream 200 in 186ms :: {"ok":true,"offset":143}
+2025-12-16 19:24:05.46
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=8
+2025-12-16 19:24:05.55
+5ca924b7
+User
+12:24:05 PM [express] POST /api/v1/inference/stream 200 in 176ms :: {"ok":true,"offset":151}
+2025-12-16 19:24:05.99
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=3
+2025-12-16 19:24:06.08
+5ca924b7
+User
+12:24:06 PM [express] POST /api/v1/inference/stream 200 in 178ms :: {"ok":true,"offset":154}
+2025-12-16 19:24:06.51
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=4
+2025-12-16 19:24:06.59
+5ca924b7
+User
+12:24:06 PM [express] POST /api/v1/inference/stream 200 in 175ms :: {"ok":true,"offset":158}
+2025-12-16 19:24:06.59
+5ca924b7
+User
+12:24:06 PM [express] POST /api/v1/inference/stream 200 in 175ms :: {"ok":true,"offset":158}
+2025-12-16 19:24:07.03
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=12
+2025-12-16 19:24:07.12
+5ca924b7
+User
+12:24:07 PM [express] POST /api/v1/inference/stream 200 in 175ms :: {"ok":true,"offset":170}
+2025-12-16 19:24:07.56
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=13
+2025-12-16 19:24:07.65
+5ca924b7
+User
+12:24:07 PM [express] POST /api/v1/inference/stream 200 in 176ms :: {"ok":true,"offset":183}
+2025-12-16 19:24:08.09
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=1
+2025-12-16 19:24:08.13
+5ca924b7
+User
+[Models] Checking 2 active nodes at 2025-12-16T12:24:08.136Z
+2025-12-16 19:24:08.13
+5ca924b7
+User
+[Models] Node node-kctghg820: lastHeartbeat=2025-12-16T12:22:19.093Z, isOnline=false, models=gemma3:4b,llama3.2:latest
+2025-12-16 19:24:08.13
+5ca924b7
+User
+[Models] Node node-z6osxolc4: lastHeartbeat=2025-12-16T12:24:08.050Z, isOnline=true, models=gemma3:4b,llama3.2:latest
+2025-12-16 19:24:08.13
+5ca924b7
+User
+12:24:08 PM [express] GET /api/v1/models 304 in 46ms :: {"models":[{"model":"gemma3:4b","nodeCount":1…
+2025-12-16 19:24:08.13
+5ca924b7
+User
+[Models] Returning 2 models: gemma3:4b(1), llama3.2:latest(1)
+2025-12-16 19:24:08.18
+5ca924b7
+User
+12:24:08 PM [express] POST /api/v1/inference/stream 200 in 177ms :: {"ok":true,"offset":184}
+2025-12-16 19:24:08.61
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=6
+2025-12-16 19:24:08.70
+5ca924b7
+User
+12:24:08 PM [express] POST /api/v1/inference/stream 200 in 186ms :: {"ok":true,"offset":190}
+2025-12-16 19:24:09.15
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=7
+2025-12-16 19:24:09.24
+5ca924b7
+User
+12:24:09 PM [express] POST /api/v1/inference/stream 200 in 180ms :: {"ok":true,"offset":197}
+2025-12-16 19:24:09.66
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=3
+2025-12-16 19:24:09.75
+5ca924b7
+User
+12:24:09 PM [express] POST /api/v1/inference/stream 200 in 178ms :: {"ok":true,"offset":200}
+2025-12-16 19:24:10.18
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=3
+2025-12-16 19:24:10.26
+5ca924b7
+User
+12:24:10 PM [express] POST /api/v1/inference/stream 200 in 178ms :: {"ok":true,"offset":203}
+2025-12-16 19:24:10.71
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=8
+2025-12-16 19:24:10.80
+5ca924b7
+User
+12:24:10 PM [express] POST /api/v1/inference/stream 200 in 189ms :: {"ok":true,"offset":211}
+2025-12-16 19:24:11.23
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=4
+2025-12-16 19:24:11.31
+5ca924b7
+User
+12:24:11 PM [express] POST /api/v1/inference/stream 200 in 176ms :: {"ok":true,"offset":215}
+2025-12-16 19:24:11.75
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=9
+2025-12-16 19:24:11.85
+5ca924b7
+User
+12:24:11 PM [express] POST /api/v1/inference/stream 200 in 186ms :: {"ok":true,"offset":224}
+2025-12-16 19:24:12.28
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=6
+2025-12-16 19:24:12.37
+5ca924b7
+User
+12:24:12 PM [express] POST /api/v1/inference/stream 200 in 185ms :: {"ok":true,"offset":230}
+2025-12-16 19:24:12.80
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=5
+2025-12-16 19:24:12.90
+5ca924b7
+User
+12:24:12 PM [express] POST /api/v1/inference/stream 200 in 185ms :: {"ok":true,"offset":235}
+2025-12-16 19:24:13.33
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=5
+2025-12-16 19:24:13.42
+5ca924b7
+User
+12:24:13 PM [express] POST /api/v1/inference/stream 200 in 177ms :: {"ok":true,"offset":240}
+2025-12-16 19:24:13.86
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=3
+2025-12-16 19:24:13.95
+5ca924b7
+User
+12:24:13 PM [express] POST /api/v1/inference/stream 200 in 190ms :: {"ok":true,"offset":243}
+2025-12-16 19:24:14.39
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=4
+
+2025-12-16 19:24:14.48
+5ca924b7
+User
+12:24:14 PM [express] POST /api/v1/inference/stream 200 in 191ms :: {"ok":true,"offset":247}
+2025-12-16 19:24:14.90
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=13
+2025-12-16 19:24:14.99
+5ca924b7
+User
+12:24:14 PM [express] POST /api/v1/inference/stream 200 in 177ms :: {"ok":true,"offset":260}
+2025-12-16 19:24:15.42
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=1
+2025-12-16 19:24:15.51
+5ca924b7
+User
+12:24:15 PM [express] POST /api/v1/inference/stream 200 in 177ms :: {"ok":true,"offset":261}
+2025-12-16 19:24:15.96
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=2
+2025-12-16 19:24:16.05
+5ca924b7
+User
+12:24:16 PM [express] POST /api/v1/inference/stream 200 in 187ms :: {"ok":true,"offset":263}
+2025-12-16 19:24:16.47
+5ca924b7
+User
+[TIMING] SSE send token: totalLatency=0ms serverToSse=0ms chars=2
+2025-12-16 19:24:16.56
+5ca924b7
+User
+12:24:16 PM [express] POST /api/v1/inference/stream 200 in 187ms :: {"ok":true,"offset":265}
+
+Collapse
+
+Wrap
+
+Colors
+

@@ -1427,11 +1427,16 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
   
   // Handle WebSocket upgrade manually
   httpServer.on('upgrade', (request, socket, head) => {
+    console.log(`[WS] Upgrade request: ${request.url} from ${request.headers.host}`);
+    
     // Only handle WebSocket connections for our /api/ws path
     if (!request.url?.startsWith('/api/ws')) {
       // Let other WebSocket connections (like Vite HMR) pass through
+      console.log(`[WS] Ignoring non-API WebSocket: ${request.url}`);
       return;
     }
+    
+    console.log(`[WS] Processing API WebSocket upgrade: ${request.url}`);
     
     // Create a minimal response stub for session parser
     const resStub = {
@@ -1472,7 +1477,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     
     // Agent connection (for bidirectional WebSocket streaming)
     if (nodeId && nodeToken) {
-      console.log(`Agent WebSocket connected: ${nodeId}`);
+      console.log(`[WS] Agent WebSocket connected: ${nodeId} (token: ${nodeToken?.slice(0,8)}...)`);
       
       // Register agent with the connection manager (handles job push and token streaming)
       agentManager.registerAgent(nodeId, ws, []);

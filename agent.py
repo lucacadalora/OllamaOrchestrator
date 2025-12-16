@@ -775,7 +775,8 @@ def run_websocket_mode(token):
     ws_url = f"{ws_url}/ws?nodeId={NODE_ID}&token={token}"
     
     log(f"🔌 Connecting to WebSocket...", BLUE)
-    log(f"   URL: {ws_url.split('?')[0]}", BLUE)
+    log(f"   Full URL: {ws_url}", BLUE)
+    log(f"   API_BASE: {API_BASE}", BLUE)
     
     def on_message(ws, message):
         try:
@@ -799,9 +800,12 @@ def run_websocket_mode(token):
     
     def on_error(ws, error):
         log(f"✗ WebSocket error: {error}", RED)
+        log(f"   Error type: {type(error).__name__}", RED)
+        import traceback
+        traceback.print_exc()
     
     def on_close(ws, close_status_code, close_msg):
-        log(f"⚠ WebSocket disconnected", YELLOW)
+        log(f"⚠ WebSocket disconnected (code={close_status_code}, msg={close_msg})", YELLOW)
     
     def on_open(ws):
         log(f"✓ WebSocket connected - Real-time mode active!", GREEN)

@@ -16,6 +16,10 @@ import platform
 import subprocess
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+from concurrent.futures import ThreadPoolExecutor
+
+# Thread pool for async HTTP requests (fire-and-forget chunk submission)
+chunk_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="chunk")
 
 try:
     import websocket
@@ -381,11 +385,11 @@ def poll_for_inference_requests(token):
                     response_buffer = []
                     reasoning_buffer = []
                     
-                    # NEAR-INSTANT STREAMING: Send tokens immediately
-                    # Flush when: ≥2 tokens OR ≥15 chars OR ≥25ms elapsed OR done
-                    buffer_size = 2   # Send every 2 tokens
-                    min_chars = 15    # Or when 15+ chars accumulated
-                    flush_interval = 0.025  # 25ms max delay - feels instant
+                    # ASYNC STREAMING: Fire-and-forget with small batches
+                    # Multiple requests fly in parallel - no blocking!
+                    buffer_size = 3   # Small batches of 3 tokens
+                    min_chars = 20    # Or 20 chars
+                    flush_interval = 0.030  # 30ms max delay
                     last_flush_time = time.time()
                     
                     with urlopen(ollama_req, timeout=300) as ollama_response:
@@ -453,30 +457,18 @@ def poll_for_inference_requests(token):
         log(f"✗ Poll error: {e}", RED)
 
 
-# Global state for offset tracking
-request_offsets = {}
+# Global state for sequence tracking (simplified - no offset sync needed)
 request_sequences = {}
+request_sequences_lock = threading.Lock()
 
-def submit_inference_chunk(token, request_id, chunk, done=False, content_type="response"):
-    """Submit a streaming chunk back to console with offset tracking"""
-    global request_offsets, request_sequences
-    
-    # Initialize if new request
-    if request_id not in request_offsets:
-        request_offsets[request_id] = 0
-        request_sequences[request_id] = 0
-    
-    offset = request_offsets[request_id]
-    seq = request_sequences[request_id]
-    
-    # Prepare delta-based payload
+def _fire_chunk_sync(token, request_id, chunk, seq, content_type, agent_ts):
+    """Internal sync function to POST a chunk - runs in thread pool"""
     data = {
         "id": request_id,
         "seq": seq,
-        "offset": offset,
-        "delta": chunk,  # This is already a delta from Ollama
-        "done": done,
-        "contentType": content_type  # "reasoning" or "response"
+        "delta": chunk,
+        "contentType": content_type,
+        "agentTs": agent_ts
     }
     
     body = json.dumps(data).encode('utf-8')
@@ -495,83 +487,33 @@ def submit_inference_chunk(token, request_id, chunk, done=False, content_type="r
         method='POST'
     )
     
-    max_retries = 3
-    retry_count = 0
+    try:
+        with urlopen(req, timeout=5) as response:
+            response.read()  # Consume response, ignore result
+    except Exception:
+        pass  # Fire and forget - errors are acceptable for streaming
+
+def submit_inference_chunk_async(token, request_id, chunk, done=False, content_type="response"):
+    """ASYNC: Submit a streaming chunk - fire and forget for minimum latency"""
+    global request_sequences
     
-    while retry_count < max_retries:
-        try:
-            with urlopen(req, timeout=10) as response:
-                result = json.loads(response.read().decode())
-                
-                # Update offset on success
-                if result.get('ok'):
-                    request_offsets[request_id] = result.get('offset', offset + len(chunk))
-                    request_sequences[request_id] = seq + 1
-                    
-                    # Clean up state when done
-                    if done:
-                        del request_offsets[request_id]
-                        del request_sequences[request_id]
-                    return
-                    
-        except HTTPError as e:
-            if e.code == 409:
-                # Offset mismatch, re-sync with server's expected offset
-                error_data = json.loads(e.read().decode())
-                expected_offset = error_data.get('expected', 0)
-                
-                log(f"⚠ Offset mismatch - expected: {expected_offset}, had: {offset}. Retrying...", YELLOW)
-                
-                # Update our offset to match server
-                request_offsets[request_id] = expected_offset
-                
-                # Retry with the same delta but corrected offset
-                # The delta is still valid, we just need to send it with the right offset
-                retry_data = {
-                    "id": request_id,
-                    "seq": seq,
-                    "offset": expected_offset,
-                    "delta": chunk,
-                    "done": done,
-                    "contentType": content_type
-                }
-                
-                retry_body = json.dumps(retry_data).encode('utf-8')
-                retry_timestamp = str(int(time.time()))
-                retry_signature = calculate_hmac(token, retry_body, retry_timestamp)
-                
-                retry_req = Request(
-                    f"{API_BASE}/v1/inference/stream",
-                    data=retry_body,
-                    headers={
-                        'Content-Type': 'application/json',
-                        'X-Node-Id': NODE_ID,
-                        'X-Node-Ts': retry_timestamp,
-                        'X-Node-Auth': retry_signature
-                    },
-                    method='POST'
-                )
-                
-                # Retry with corrected offset
-                with urlopen(retry_req, timeout=10) as retry_response:
-                    retry_result = json.loads(retry_response.read().decode())
-                    if retry_result.get('ok'):
-                        request_offsets[request_id] = retry_result.get('offset', expected_offset + len(chunk))
-                        request_sequences[request_id] = seq + 1
-                        if done:
-                            del request_offsets[request_id]
-                            del request_sequences[request_id]
-                return  # Successfully retried
-            else:
-                retry_count += 1
-                if retry_count >= max_retries:
-                    log(f"✗ Failed to submit chunk after {max_retries} retries", RED)
-                time.sleep(0.1 * retry_count)  # Exponential backoff
-        except Exception as e:
-            retry_count += 1
-            if retry_count >= max_retries:
-                log(f"✗ Chunk submission error: {e}", RED)
-            time.sleep(0.1 * retry_count)
+    # Get next sequence number (thread-safe)
+    with request_sequences_lock:
+        if request_id not in request_sequences:
+            request_sequences[request_id] = 0
+        seq = request_sequences[request_id]
+        request_sequences[request_id] = seq + 1
+        
+        if done:
+            del request_sequences[request_id]
+    
+    # Fire async - don't wait for response
+    agent_ts = int(time.time() * 1000)  # Milliseconds for timing
+    chunk_executor.submit(_fire_chunk_sync, token, request_id, chunk, seq, content_type, agent_ts)
+
+def submit_inference_chunk(token, request_id, chunk, done=False, content_type="response"):
+    """Submit a streaming chunk - now uses async fire-and-forget"""
+    submit_inference_chunk_async(token, request_id, chunk, done, content_type)
 
 def submit_inference_response(token, request_id, response, error=None, reasoning=None):
     """Submit inference response back to console"""

@@ -380,7 +380,9 @@ def poll_for_inference_requests(token):
                     full_reasoning = ""
                     response_buffer = []
                     reasoning_buffer = []
-                    buffer_size = 3  # Small buffer for near-real-time streaming
+                    # Larger buffer for HTTP mode - each request takes 150-200ms, so batch more
+                    buffer_size = 20  # ~20 tokens per HTTP request
+                    min_chars = 50  # Or flush when we have 50+ characters
                     last_flush_time = time.time()
                     
                     with urlopen(ollama_req, timeout=300) as ollama_response:
@@ -401,13 +403,17 @@ def poll_for_inference_requests(token):
                                     full_response += response_chunk
                                     response_buffer.append(response_chunk)
                                 
-                                # Send chunks in batches with time-based flush (faster for real-time streaming)
+                                # Calculate total buffered characters
+                                buffered_chars = sum(len(s) for s in response_buffer) + sum(len(s) for s in reasoning_buffer)
+                                
+                                # Send chunks in batches - optimize for HTTP round-trip time
                                 current_time = time.time()
                                 should_flush = (
                                     len(response_buffer) >= buffer_size or
                                     len(reasoning_buffer) >= buffer_size or
+                                    buffered_chars >= min_chars or  # Flush when enough characters accumulated
                                     chunk.get("done", False) or  # Stream complete
-                                    (current_time - last_flush_time > 0.05 and (response_buffer or reasoning_buffer))  # 50ms flush
+                                    (current_time - last_flush_time > 0.2 and (response_buffer or reasoning_buffer))  # 200ms max delay
                                 )
                                 
                                 if should_flush:
@@ -834,12 +840,25 @@ def run_websocket_mode(token):
             on_close=on_close
         )
         
-        # Run forever
-        ws.run_forever()
-        return True
+        # Run with SSL for wss:// connections
+        import ssl
+        ssl_context = None
+        if ws_url.startswith("wss://"):
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = True
+            ssl_context.verify_mode = ssl.CERT_REQUIRED
+        
+        # Run forever (blocks until disconnected)
+        ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE} if ssl_context else None)
+        
+        # If we get here, WebSocket disconnected - return False to trigger HTTP fallback
+        log(f"⚠ WebSocket run_forever() ended", YELLOW)
+        return False
         
     except Exception as e:
         log(f"✗ WebSocket connection failed: {e}", RED)
+        import traceback
+        traceback.print_exc()
         return False
 
 def main():
@@ -896,11 +915,21 @@ Configuration:
         log(f"", "")
         
         try:
-            run_websocket_mode(token)
+            ws_result = run_websocket_mode(token)
+            if ws_result:
+                # WebSocket ran successfully, no need for HTTP fallback
+                return
+            else:
+                log(f"⚠ WebSocket connection failed, falling back to HTTP polling", YELLOW)
         except KeyboardInterrupt:
             log(f"", "")
             log(f"👋 Agent stopped by user", YELLOW)
             sys.exit(0)
+        except Exception as e:
+            log(f"⚠ WebSocket error: {e}, falling back to HTTP polling", YELLOW)
+    else:
+        if not HAS_WEBSOCKET:
+            log(f"⚠ WebSocket library not installed (pip3 install websocket-client)", YELLOW)
     
     # Fallback to HTTP polling mode
     log(f"   Mode: HTTP polling", YELLOW)

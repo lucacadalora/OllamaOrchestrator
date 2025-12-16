@@ -86,6 +86,14 @@ export function useStreamingChat() {
             const json = JSON.parse(data);
 
             if (json.type === 'delta') {
+              const browserReceiveTs = Date.now();
+              const timing = json.timing;
+              if (timing?.agentTs) {
+                const totalLatency = browserReceiveTs - timing.agentTs;
+                const sseLatency = browserReceiveTs - (timing.sseTs || browserReceiveTs);
+                console.log(`[TIMING] Browser received: totalLatency=${totalLatency}ms sseLatency=${sseLatency}ms chars=${json.delta?.length || 0}`);
+              }
+              
               if (json.contentType === 'reasoning') {
                 fullReasoning += json.delta;
                 setState(prev => ({

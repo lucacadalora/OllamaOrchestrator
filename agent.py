@@ -710,12 +710,15 @@ def handle_websocket_inference(token, message, ws=None):
                     # Send token immediately via WebSocket (0ms overhead!)
                     if ws and (reasoning_chunk or response_chunk):
                         try:
+                            # Add timestamp for latency tracing
+                            send_ts = int(time.time() * 1000)
                             ws.send(json.dumps({
                                 "type": "token",
                                 "jobId": job_id,
                                 "token": response_chunk,
                                 "reasoning": reasoning_chunk,
-                                "done": done
+                                "done": done,
+                                "agentTs": send_ts  # Timestamp when agent sends
                             }))
                         except Exception as e:
                             log(f"✗ WebSocket send error: {e}", RED)

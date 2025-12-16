@@ -1247,25 +1247,35 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     
     // EVENT-DRIVEN: Listen for tokens from AgentConnectionManager (WebSocket path)
     // This is INSTANT - no polling delay!
-    const onToken = (event: { jobId: string; token: string; done: boolean; agentId: string; reasoning?: string }) => {
+    const onToken = (event: { jobId: string; token: string; done: boolean; agentId: string; reasoning?: string; serverReceiveTs?: number; agentTs?: number }) => {
       if (event.jobId !== jobId || isComplete) return;
+      
+      const sseSendTs = Date.now();
+      const serverToSseLatency = event.serverReceiveTs ? sseSendTs - event.serverReceiveTs : 0;
+      const totalLatency = event.agentTs ? sseSendTs - event.agentTs : 0;
       
       // Send reasoning delta immediately
       if (event.reasoning) {
-        res.write(`data: ${JSON.stringify({ 
+        const payload = JSON.stringify({ 
           type: 'delta', 
           contentType: 'reasoning',
-          delta: event.reasoning
-        })}\n\n`);
+          delta: event.reasoning,
+          timing: { agentTs: event.agentTs, serverTs: event.serverReceiveTs, sseTs: sseSendTs, totalMs: totalLatency }
+        });
+        console.log(`[TIMING] SSE send reasoning: totalLatency=${totalLatency}ms serverToSse=${serverToSseLatency}ms`);
+        res.write(`data: ${payload}\n\n`);
       }
       
       // Send response token immediately
       if (event.token) {
-        res.write(`data: ${JSON.stringify({ 
+        const payload = JSON.stringify({ 
           type: 'delta', 
           contentType: 'response',
-          delta: event.token
-        })}\n\n`);
+          delta: event.token,
+          timing: { agentTs: event.agentTs, serverTs: event.serverReceiveTs, sseTs: sseSendTs, totalMs: totalLatency }
+        });
+        console.log(`[TIMING] SSE send token: totalLatency=${totalLatency}ms serverToSse=${serverToSseLatency}ms chars=${event.token.length}`);
+        res.write(`data: ${payload}\n\n`);
       }
     };
     

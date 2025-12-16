@@ -24,6 +24,8 @@ interface TokenEvent {
   done: boolean;
   agentId: string;
   reasoning?: string;
+  serverReceiveTs?: number;  // Timestamp when server received token
+  agentTs?: number;  // Timestamp when agent sent token
 }
 
 export class AgentConnectionManager extends EventEmitter {
@@ -73,12 +75,18 @@ export class AgentConnectionManager extends EventEmitter {
         break;
 
       case 'token':
+        const serverReceiveTs = Date.now();
+        const agentTs = message.agentTs || serverReceiveTs;
+        const wsLatency = serverReceiveTs - agentTs;
+        console.log(`[TIMING] Token WS received: job=${message.jobId?.slice(0,8)} wsLatency=${wsLatency}ms`);
         this.emit('token', {
           jobId: message.jobId,
           token: message.token,
           done: message.done,
           agentId: nodeId,
           reasoning: message.reasoning,
+          serverReceiveTs,
+          agentTs,
         } as TokenEvent);
         break;
 

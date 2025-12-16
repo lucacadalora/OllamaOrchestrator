@@ -8,6 +8,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { ReceiptGenerator } from "./receiptGenerator";
 import { geolocationService } from "./services/geolocation";
+import { agentManager } from "./services/AgentConnectionManager";
 import fs from "fs";
 import path from "path";
 
@@ -1186,39 +1187,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     const request = await storage.createInferenceRequest(model, messages, userId);
     const jobId = request.id;
     
-    // Push request to connected agent via WebSocket (eliminates polling delay)
-    let pushedToAgent = false;
-    for (const node of availableNodes) {
-      const agentWs = agentConnections.get(node.id);
-      if (agentWs && agentWs.readyState === WebSocket.OPEN) {
-        agentWs.send(JSON.stringify({
-          type: 'inference_request',
-          id: jobId,
-          model,
-          messages,
-          options
-        }));
-        pushedToAgent = true;
-        console.log(`Pushed inference request ${jobId} to agent ${node.id} via WebSocket`);
-        break; // Only send to one agent
-      }
-    }
-    
-    if (!pushedToAgent) {
-      console.log(`No WebSocket-connected agents available, request ${jobId} queued for polling`);
-    }
-    
-    // Set SSE headers
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
-    res.flushHeaders();
-    
-    // Send initial event with job ID
-    res.write(`data: ${JSON.stringify({ type: 'started', jobId })}\n\n`);
-    
-    // Initialize job state if not exists
+    // Initialize job state before attempting to push
     let jobState = jobStates.get(jobId);
     if (!jobState) {
       jobState = {
@@ -1230,6 +1199,30 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
       };
       jobStates.set(jobId, jobState);
     }
+    
+    // Try to push job to a WebSocket-connected agent (instant delivery)
+    const { submitted, agentId } = agentManager.submitJob({
+      jobId,
+      model,
+      messages,
+      options
+    });
+    
+    if (submitted) {
+      console.log(`Job ${jobId} pushed to agent ${agentId} via WebSocket (instant)`);
+    } else {
+      console.log(`No WebSocket agents available, job ${jobId} queued for HTTP polling`);
+    }
+    
+    // Set SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
+    res.flushHeaders();
+    
+    // Send initial event with job ID
+    res.write(`data: ${JSON.stringify({ type: 'started', jobId })}\n\n`);
     
     // Track last sent offset to avoid duplicate sends
     let lastSentOffset = 0;
@@ -1385,9 +1378,6 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     });
   });
   
-  // Store agent WebSocket connections by node ID
-  const agentConnections = new Map<string, WebSocket>();
-  
   // WebSocket connection handler
   wss.on("connection", (ws, req) => {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
@@ -1397,31 +1387,32 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     const jobId = url.searchParams.get("jobId");
     const since = Number(url.searchParams.get("since") || 0);
     
-    // Agent connection (for streaming inference responses)
+    // Agent connection (for bidirectional WebSocket streaming)
     if (nodeId && nodeToken) {
       console.log(`Agent WebSocket connected: ${nodeId}`);
       
-      // Store agent connection for pushing inference requests
-      agentConnections.set(nodeId, ws);
+      // Register agent with the connection manager (handles job push and token streaming)
+      agentManager.registerAgent(nodeId, ws, []);
       
       ws.on("message", async (data) => {
         try {
           const message = JSON.parse(data.toString());
           
-          if (message.type === "stream_chunk") {
-            // Forward chunk to the specific frontend WebSocket for this request
-            const frontendWs = requestConnections.get(message.requestId);
-            if (frontendWs && frontendWs.readyState === WebSocket.OPEN) {
-              frontendWs.send(JSON.stringify({
-                type: "chunk",
-                requestId: message.requestId,
-                chunk: message.chunk,
-                done: message.done
-              }));
-              
-              // Clean up request mapping when streaming is complete
-              if (message.done) {
-                requestConnections.delete(message.requestId);
+          // Handle token streaming and other messages via the manager
+          if (message.type === "token" || message.type === "job_complete" || message.type === "job_error" || message.type === "heartbeat" || message.type === "status") {
+            agentManager.handleAgentMessage(nodeId, message);
+          }
+          
+          // Also update job state for SSE delivery
+          if (message.type === "token") {
+            const state = jobStates.get(message.jobId);
+            if (state) {
+              if (message.reasoning) {
+                state.reasoning += message.reasoning;
+              }
+              if (message.token) {
+                state.transcript += message.token;
+                state.committedOffset = [...state.transcript].length;
               }
             }
           }
@@ -1431,8 +1422,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
       });
       
       ws.on("close", () => {
-        console.log(`Agent WebSocket disconnected: ${nodeId}`);
-        agentConnections.delete(nodeId);
+        agentManager.removeAgent(nodeId);
       });
       
       return;

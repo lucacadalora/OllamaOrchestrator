@@ -1186,6 +1186,28 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     const request = await storage.createInferenceRequest(model, messages, userId);
     const jobId = request.id;
     
+    // Push request to connected agent via WebSocket (eliminates polling delay)
+    let pushedToAgent = false;
+    for (const node of availableNodes) {
+      const agentWs = agentConnections.get(node.id);
+      if (agentWs && agentWs.readyState === WebSocket.OPEN) {
+        agentWs.send(JSON.stringify({
+          type: 'inference_request',
+          id: jobId,
+          model,
+          messages,
+          options
+        }));
+        pushedToAgent = true;
+        console.log(`Pushed inference request ${jobId} to agent ${node.id} via WebSocket`);
+        break; // Only send to one agent
+      }
+    }
+    
+    if (!pushedToAgent) {
+      console.log(`No WebSocket-connected agents available, request ${jobId} queued for polling`);
+    }
+    
     // Set SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -1379,6 +1401,9 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     if (nodeId && nodeToken) {
       console.log(`Agent WebSocket connected: ${nodeId}`);
       
+      // Store agent connection for pushing inference requests
+      agentConnections.set(nodeId, ws);
+      
       ws.on("message", async (data) => {
         try {
           const message = JSON.parse(data.toString());
@@ -1407,6 +1432,7 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
       
       ws.on("close", () => {
         console.log(`Agent WebSocket disconnected: ${nodeId}`);
+        agentConnections.delete(nodeId);
       });
       
       return;

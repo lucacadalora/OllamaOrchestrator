@@ -1416,6 +1416,30 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
               }
             }
           }
+          
+          // Handle job completion - mark in storage so SSE loop can terminate
+          if (message.type === "job_complete") {
+            const jobId = message.jobId;
+            const state = jobStates.get(jobId);
+            const response = state?.transcript || "";
+            console.log(`Job ${jobId} completed via WebSocket (${response.length} chars)`);
+            
+            // Mark the inference request as complete in storage
+            storage.updateRequestStatus(jobId, "completed", response).catch((err: Error) => {
+              console.error(`Failed to mark job ${jobId} as complete:`, err);
+            });
+          }
+          
+          // Handle job errors
+          if (message.type === "job_error") {
+            const jobId = message.jobId;
+            console.error(`Job ${jobId} failed via WebSocket:`, message.error);
+            
+            // Mark the inference request as failed in storage
+            storage.updateRequestStatus(jobId, "failed", undefined, message.error).catch((err: Error) => {
+              console.error(`Failed to mark job ${jobId} as failed:`, err);
+            });
+          }
         } catch (error) {
           console.error("Agent WebSocket message error:", error);
         }

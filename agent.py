@@ -473,12 +473,21 @@ def send_test_receipt(token):
 
 def handle_websocket_inference(token, message, ws=None):
     """Handle inference request received via WebSocket"""
+    # Extract job_id early so it's available in exception handler
+    job_id = message.get('jobId') or message.get('id')
+    
     try:
-        request_id = message.get('id')
         model = message.get('model', 'llama3.2')
         messages = message.get('messages', [])
         
-        log(f"📥 WebSocket request {request_id[:8]}...", BLUE)
+        log(f"📥 WebSocket job {job_id[:8]}...", BLUE)
+        
+        # Notify server we're starting (busy status)
+        if ws:
+            ws.send(json.dumps({
+                "type": "status",
+                "status": "busy"
+            }))
         
         # Convert messages to Ollama format
         prompt = ""
@@ -528,49 +537,58 @@ def handle_websocket_inference(token, message, ws=None):
                     if response_chunk:
                         full_response += response_chunk
                     
-                    # Send reasoning chunk immediately
-                    if reasoning_chunk:
-                        if ws:
-                            # Send via WebSocket (ordered, synchronous)
-                            try:
-                                ws.send(json.dumps({
-                                    "type": "stream_chunk",
-                                    "requestId": request_id,
-                                    "chunk": reasoning_chunk,
-                                    "contentType": "reasoning",
-                                    "done": done
-                                }))
-                            except Exception as e:
-                                log(f"✗ WebSocket send error: {e}", RED)
-                        else:
-                            # Fallback to HTTP (may arrive out of order)
-                            submit_inference_chunk(token, request_id, reasoning_chunk, done, content_type="reasoning")
-                    
-                    # Send response chunk immediately
-                    if response_chunk:
-                        if ws:
-                            # Send via WebSocket (ordered, synchronous)
-                            try:
-                                ws.send(json.dumps({
-                                    "type": "stream_chunk",
-                                    "requestId": request_id,
-                                    "chunk": response_chunk,
-                                    "contentType": "response",
-                                    "done": done
-                                }))
-                            except Exception as e:
-                                log(f"✗ WebSocket send error: {e}", RED)
-                        else:
-                            # Fallback to HTTP (may arrive out of order)
-                            submit_inference_chunk(token, request_id, response_chunk, done, content_type="response")
+                    # Send token immediately via WebSocket (0ms overhead!)
+                    if ws and (reasoning_chunk or response_chunk):
+                        try:
+                            ws.send(json.dumps({
+                                "type": "token",
+                                "jobId": job_id,
+                                "token": response_chunk,
+                                "reasoning": reasoning_chunk,
+                                "done": done
+                            }))
+                        except Exception as e:
+                            log(f"✗ WebSocket send error: {e}", RED)
+                    elif not ws:
+                        # Fallback to HTTP (slow, 80-120ms overhead per chunk)
+                        if reasoning_chunk:
+                            submit_inference_chunk(token, job_id, reasoning_chunk, done, content_type="reasoning")
+                        if response_chunk:
+                            submit_inference_chunk(token, job_id, response_chunk, done, content_type="response")
         
-        # Send completion
-        submit_inference_response(token, request_id, full_response, reasoning=full_reasoning)
+        # Send job completion
+        if ws:
+            ws.send(json.dumps({
+                "type": "job_complete",
+                "jobId": job_id
+            }))
+            # Switch back to idle
+            ws.send(json.dumps({
+                "type": "status",
+                "status": "idle"
+            }))
+        else:
+            submit_inference_response(token, job_id, full_response, reasoning=full_reasoning)
+        
         log(f"✓ WebSocket inference completed", GREEN)
         
     except Exception as e:
         log(f"✗ WebSocket inference error: {e}", RED)
-        submit_inference_response(token, request_id, None, str(e))
+        if ws:
+            try:
+                ws.send(json.dumps({
+                    "type": "job_error",
+                    "jobId": job_id,
+                    "error": str(e)
+                }))
+                ws.send(json.dumps({
+                    "type": "status",
+                    "status": "idle"
+                }))
+            except:
+                pass
+        else:
+            submit_inference_response(token, job_id, None, str(e))
 
 def run_websocket_mode(token):
     """Run agent in WebSocket mode for real-time streaming"""
@@ -589,15 +607,19 @@ def run_websocket_mode(token):
     def on_message(ws, message):
         try:
             data = json.loads(message)
+            msg_type = data.get('type')
             
-            if data.get('type') == 'inference_request':
+            if msg_type == 'job':
                 # Handle inference in background thread to not block WebSocket
+                log(f"📥 Received job push from server", GREEN)
                 thread = threading.Thread(
                     target=handle_websocket_inference,
                     args=(token, data, ws),
                     daemon=True
                 )
                 thread.start()
+            elif msg_type == 'registered':
+                log(f"✓ Agent registered with server", GREEN)
                 
         except Exception as e:
             log(f"✗ WebSocket message error: {e}", RED)

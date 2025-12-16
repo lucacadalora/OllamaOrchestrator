@@ -1157,6 +1157,165 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     }
   });
 
+  // SSE Streaming endpoint - Direct streaming without polling delay
+  app.post("/api/v1/chat/stream", requireAuth, async (req, res) => {
+    const { model, messages, options } = req.body;
+    const userId = req.session.userId!;
+    
+    if (!model || !messages) {
+      return res.status(400).json({ error: "Model and messages required" });
+    }
+    
+    // Check if any nodes have this model and are online
+    const activeNodes = await storage.listNodes({ status: "active" });
+    const now = new Date();
+    const thirtySecondsAgo = new Date(now.getTime() - 30000);
+    
+    const availableNodes = activeNodes.filter(node => 
+      node.models && 
+      node.models.includes(model) &&
+      node.lastHeartbeat && 
+      new Date(node.lastHeartbeat) >= thirtySecondsAgo
+    );
+    
+    if (availableNodes.length === 0) {
+      return res.status(404).json({ error: "No nodes available with this model" });
+    }
+    
+    // Create inference request
+    const request = await storage.createInferenceRequest(model, messages, userId);
+    const jobId = request.id;
+    
+    // Set SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
+    res.flushHeaders();
+    
+    // Send initial event with job ID
+    res.write(`data: ${JSON.stringify({ type: 'started', jobId })}\n\n`);
+    
+    // Initialize job state if not exists
+    let jobState = jobStates.get(jobId);
+    if (!jobState) {
+      jobState = {
+        committedOffset: 0,
+        transcript: "",
+        reasoning: "",
+        seenSeq: new Set(),
+        clients: new Set()
+      };
+      jobStates.set(jobId, jobState);
+    }
+    
+    // Track last sent offset to avoid duplicate sends
+    let lastSentOffset = 0;
+    let lastSentReasoningLength = 0;
+    let isComplete = false;
+    
+    // Polling interval for job state changes (10ms for near-real-time)
+    const checkInterval = setInterval(() => {
+      const state = jobStates.get(jobId);
+      if (!state) {
+        clearInterval(checkInterval);
+        if (!isComplete) {
+          res.write(`data: ${JSON.stringify({ type: 'error', error: 'Job not found' })}\n\n`);
+          res.end();
+        }
+        return;
+      }
+      
+      // Send reasoning delta if new reasoning content
+      if (state.reasoning.length > lastSentReasoningLength) {
+        const reasoningDelta = state.reasoning.slice(lastSentReasoningLength);
+        res.write(`data: ${JSON.stringify({ 
+          type: 'delta', 
+          contentType: 'reasoning',
+          delta: reasoningDelta,
+          offset: lastSentReasoningLength
+        })}\n\n`);
+        lastSentReasoningLength = state.reasoning.length;
+      }
+      
+      // Send response delta if new content
+      if (state.committedOffset > lastSentOffset) {
+        const delta = sliceByOffset(state.transcript, lastSentOffset, state.committedOffset);
+        res.write(`data: ${JSON.stringify({ 
+          type: 'delta', 
+          contentType: 'response',
+          delta,
+          offset: lastSentOffset
+        })}\n\n`);
+        lastSentOffset = state.committedOffset;
+      }
+    }, 10); // Check every 10ms for updates
+    
+    // Watch for job completion
+    const completionCheck = setInterval(async () => {
+      try {
+        const dbRequest = await storage.getRequestById(jobId);
+        if (dbRequest && (dbRequest.status === 'completed' || dbRequest.status === 'failed')) {
+          isComplete = true;
+          clearInterval(checkInterval);
+          clearInterval(completionCheck);
+          
+          // Send any remaining content
+          const state = jobStates.get(jobId);
+          if (state) {
+            if (state.reasoning.length > lastSentReasoningLength) {
+              const reasoningDelta = state.reasoning.slice(lastSentReasoningLength);
+              res.write(`data: ${JSON.stringify({ 
+                type: 'delta', 
+                contentType: 'reasoning',
+                delta: reasoningDelta,
+                offset: lastSentReasoningLength
+              })}\n\n`);
+            }
+            if (state.committedOffset > lastSentOffset) {
+              const delta = sliceByOffset(state.transcript, lastSentOffset, state.committedOffset);
+              res.write(`data: ${JSON.stringify({ 
+                type: 'delta', 
+                contentType: 'response',
+                delta,
+                offset: lastSentOffset
+              })}\n\n`);
+            }
+          }
+          
+          // Send completion event
+          if (dbRequest.status === 'failed') {
+            res.write(`data: ${JSON.stringify({ type: 'error', error: dbRequest.error || 'Request failed' })}\n\n`);
+          } else {
+            res.write(`data: ${JSON.stringify({ type: 'done', nodeId: dbRequest.nodeId })}\n\n`);
+          }
+          res.write('data: [DONE]\n\n');
+          res.end();
+        }
+      } catch (error) {
+        console.error('SSE completion check error:', error);
+      }
+    }, 50); // Check completion every 50ms
+    
+    // Timeout after 5 minutes
+    const timeout = setTimeout(() => {
+      isComplete = true;
+      clearInterval(checkInterval);
+      clearInterval(completionCheck);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Request timeout' })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }, 5 * 60 * 1000);
+    
+    // Clean up on client disconnect
+    req.on('close', () => {
+      isComplete = true;
+      clearInterval(checkInterval);
+      clearInterval(completionCheck);
+      clearTimeout(timeout);
+    });
+  });
+
   const httpServer = createServer(app);
   
   // Create WebSocket server for real-time streaming (noServer mode)

@@ -15,11 +15,9 @@ import {
   Copy, RefreshCw, ChevronDown, ChevronUp, Image, Paperclip,
   Globe, Layers, Check
 } from "lucide-react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { useWebSocketChat } from "@/hooks/useWebSocketChat";
-import { MessageContent } from "@/components/MessageContent";
+import { useStreamingChat } from "@/hooks/useStreamingChat";
 import { StreamingMessage } from "@/components/StreamingMessage";
 import { ReasoningDisplay } from "@/components/ReasoningDisplay";
 
@@ -257,34 +255,19 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [httpStreamingMessageId, setHttpStreamingMessageId] = useState<string | null>(null);
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
   const [showInferenceJobs, setShowInferenceJobs] = useState(true);
   const { toast } = useToast();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const lastAssistantMessageIdRef = useRef<string | null>(null);
+  const currentMessageIdRef = useRef<string | null>(null);
   const messageStartTimesRef = useRef<Map<string, number>>(new Map());
 
-  const handleStreamComplete = useCallback((finalContent: string, finalReasoning?: string) => {
-    if (lastAssistantMessageIdRef.current) {
-      const messageId = lastAssistantMessageIdRef.current;
-      const startTime = messageStartTimesRef.current.get(messageId);
-      const thinkingTime = startTime ? (Date.now() - startTime) / 1000 : undefined;
-      
-      setMessages(prev => prev.map(msg =>
-        msg.id === messageId
-          ? { ...msg, content: finalContent, reasoning: finalReasoning, thinkingTime }
-          : msg
-      ));
-      
-      messageStartTimesRef.current.delete(messageId);
-    }
-    setTimeout(() => {
-      lastAssistantMessageIdRef.current = null;
-    }, 0);
-  }, []);
-
-  const { isConnected, sendMessage: sendWebSocketMessage, currentResponse, currentReasoning, isStreaming } = useWebSocketChat(handleStreamComplete);
+  const { 
+    isStreaming, 
+    currentResponse, 
+    currentReasoning, 
+    sendMessage: sendStreamingMessage 
+  } = useStreamingChat();
 
   const { data: modelsData, isLoading: loadingModels } = useQuery<ModelsResponse>({
     queryKey: ["/api/v1/models"],
@@ -297,91 +280,16 @@ export default function Chat() {
     }
   }, [modelsData, selectedModel]);
 
-  const pollForResponse = async (requestId: string, messageId: string) => {
-    const maxAttempts = 600;
-    let attempts = 0;
-    setHttpStreamingMessageId(messageId);
-    
-    while (attempts < maxAttempts) {
-      try {
-        const response = await fetch(`/api/v1/inference/status/${requestId}`);
-        const data = await response.json();
-        
-        if (data.response) {
-          setMessages(prev => prev.map(msg =>
-            msg.id === messageId
-              ? { ...msg, content: data.response, nodeId: data.nodeId }
-              : msg
-          ));
-        }
-        
-        if (data.done) {
-          const startTime = messageStartTimesRef.current.get(messageId);
-          const thinkingTime = startTime ? (Date.now() - startTime) / 1000 : undefined;
-          setMessages(prev => prev.map(msg =>
-            msg.id === messageId
-              ? { ...msg, thinkingTime }
-              : msg
-          ));
-          setHttpStreamingMessageId(null);
-          messageStartTimesRef.current.delete(messageId);
-          
-          if (data.error) {
-            toast({
-              title: "Inference Error",
-              description: data.error,
-              variant: "destructive",
-            });
-          }
-          break;
-        }
-        
-        await new Promise(resolve => setTimeout(resolve, 500));
-        attempts++;
-      } catch (error) {
-        console.error("Polling error:", error);
-        setHttpStreamingMessageId(null);
-        break;
-      }
+  // Update current streaming message with live content
+  useEffect(() => {
+    if (currentMessageIdRef.current && (currentResponse || currentReasoning)) {
+      setMessages(prev => prev.map(msg =>
+        msg.id === currentMessageIdRef.current
+          ? { ...msg, content: currentResponse, reasoning: currentReasoning || undefined }
+          : msg
+      ));
     }
-  };
-
-  const sendMutation = useMutation({
-    mutationFn: async (message: string) => {
-      const response = await apiRequest("POST", "/api/v1/inference/chat", {
-        model: selectedModel,
-        messages: [
-          ...messages.map(m => ({ role: m.role, content: m.content })),
-          { role: "user", content: message }
-        ],
-        options: {
-          think: thinkingEnabled
-        }
-      });
-      return response.json();
-    },
-    onSuccess: async (data) => {
-      const assistantMessageId = `msg-${Date.now()}-assistant`;
-      const assistantMessage: Message = {
-        id: assistantMessageId,
-        role: "assistant",
-        content: "...",
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, assistantMessage]);
-      
-      if (data.requestId) {
-        await pollForResponse(data.requestId, assistantMessageId);
-      }
-    },
-    onError: (error) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to send message",
-        variant: "destructive",
-      });
-    },
-  });
+  }, [currentResponse, currentReasoning]);
 
   const handleFileUpload = () => {
     toast({
@@ -397,49 +305,64 @@ export default function Chat() {
     });
   };
 
-  const handleSend = () => {
-    if (!input.trim() || !selectedModel) return;
+  const handleSend = async () => {
+    if (!input.trim() || !selectedModel || isStreaming) return;
 
+    const userContent = input.trim();
     const userMessage: Message = {
       id: `msg-${Date.now()}-user`,
       role: "user",
-      content: input.trim(),
+      content: userContent,
       timestamp: new Date(),
     };
-    setMessages(prev => [...prev, userMessage]);
     
-    const allMessages = [...messages.map(m => ({ role: m.role, content: m.content })), { role: "user", content: input.trim() }];
-    const sentViaWebSocket = sendWebSocketMessage(selectedModel, allMessages, { think: thinkingEnabled });
+    const assistantMessageId = `msg-${Date.now()}-assistant`;
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "",
+      timestamp: new Date(),
+    };
     
-    if (!sentViaWebSocket) {
-      const assistantMsgId = `msg-${Date.now()}-assistant`;
-      messageStartTimesRef.current.set(assistantMsgId, Date.now());
-      sendMutation.mutate(input.trim());
-    } else {
-      const assistantMessageId = `msg-${Date.now()}-assistant`;
-      messageStartTimesRef.current.set(assistantMessageId, Date.now());
-      lastAssistantMessageIdRef.current = assistantMessageId;
-      const assistantMessage: Message = {
-        id: assistantMessageId,
-        role: "assistant",
-        content: "",
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, assistantMessage]);
-    }
+    // Build conversation payload BEFORE updating state to ensure we include the new user message
+    const allMessages = [
+      ...messages.map(m => ({ role: m.role, content: m.content })), 
+      { role: "user" as const, content: userContent }
+    ];
     
+    setMessages(prev => [...prev, userMessage, assistantMessage]);
+    currentMessageIdRef.current = assistantMessageId;
+    messageStartTimesRef.current.set(assistantMessageId, Date.now());
     setInput("");
+    
+    await sendStreamingMessage(
+      selectedModel,
+      allMessages,
+      { think: thinkingEnabled },
+      undefined, // onToken - handled by useEffect watching currentResponse
+      (fullResponse, fullReasoning) => {
+        const startTime = messageStartTimesRef.current.get(assistantMessageId);
+        const thinkingTime = startTime ? (Date.now() - startTime) / 1000 : undefined;
+        
+        setMessages(prev => prev.map(msg =>
+          msg.id === assistantMessageId
+            ? { ...msg, content: fullResponse, reasoning: fullReasoning || undefined, thinkingTime }
+            : msg
+        ));
+        
+        messageStartTimesRef.current.delete(assistantMessageId);
+        currentMessageIdRef.current = null;
+      },
+      (error) => {
+        toast({
+          title: "Error",
+          description: error,
+          variant: "destructive",
+        });
+        currentMessageIdRef.current = null;
+      }
+    );
   };
-
-  useEffect(() => {
-    if ((currentResponse || currentReasoning) && lastAssistantMessageIdRef.current) {
-      setMessages(prev => prev.map(msg =>
-        msg.id === lastAssistantMessageIdRef.current
-          ? { ...msg, content: currentResponse, reasoning: currentReasoning }
-          : msg
-      ));
-    }
-  }, [currentResponse, currentReasoning]);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -475,15 +398,15 @@ export default function Chat() {
           <h1 className="text-lg font-semibold">Gradient Chat</h1>
         </div>
         <div className="flex items-center gap-2">
-          {isConnected ? (
+          {isStreaming ? (
             <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
-              <Wifi className="w-3 h-3 mr-1" />
-              Connected
+              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+              Streaming
             </Badge>
           ) : (
-            <Badge variant="outline" className="text-muted-foreground">
-              <WifiOff className="w-3 h-3 mr-1" />
-              Offline
+            <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
+              <Wifi className="w-3 h-3 mr-1" />
+              Ready
             </Badge>
           )}
         </div>
@@ -536,8 +459,8 @@ export default function Chat() {
                     isStreaming={isStreaming}
                     currentResponse={currentResponse}
                     currentReasoning={currentReasoning}
-                    isCurrentMessage={message.id === lastAssistantMessageIdRef.current}
-                    httpStreamingMessageId={httpStreamingMessageId}
+                    isCurrentMessage={message.id === currentMessageIdRef.current}
+                    httpStreamingMessageId={null}
                   />
                 )
               ))}
@@ -622,7 +545,7 @@ export default function Chat() {
                   }
                 }}
                 placeholder={selectedModel ? "Message Gradient..." : "Select a model first..."}
-                disabled={!selectedModel || sendMutation.isPending || httpStreamingMessageId !== null}
+                disabled={!selectedModel || isStreaming}
                 className="flex-1 bg-transparent resize-none border-0 focus:outline-none focus:ring-0 py-2 px-2 text-sm min-h-[40px] max-h-32"
                 rows={1}
                 data-testid="chat-input"
@@ -630,12 +553,12 @@ export default function Chat() {
               
               <Button
                 onClick={handleSend}
-                disabled={!selectedModel || !input.trim() || sendMutation.isPending || isStreaming || httpStreamingMessageId !== null}
+                disabled={!selectedModel || !input.trim() || isStreaming}
                 className="h-9 w-9 shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white"
                 size="icon"
                 data-testid="send-button"
               >
-                {sendMutation.isPending || isStreaming ? (
+                {isStreaming ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <Send className="w-4 h-4" />

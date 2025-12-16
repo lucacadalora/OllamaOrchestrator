@@ -9,24 +9,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { 
-  Bot, Send, User, Loader2, Brain, 
+  Bot, Send, User, Loader2,
   Copy, ChevronDown, ChevronUp, Image, Paperclip,
-  Globe, Check, Sparkles
+  Globe, Check
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useStreamingChat } from "@/hooks/useStreamingChat";
 import { StreamingMessage } from "@/components/StreamingMessage";
-import { ReasoningDisplay } from "@/components/ReasoningDisplay";
 
 interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
-  reasoning?: string;
   timestamp: Date;
   nodeId?: string;
-  thinkingTime?: number;
 }
 
 interface Model {
@@ -60,12 +57,12 @@ function NetworkVisualization({ nodes }: { nodes: string[] }) {
   });
 
   return (
-    <div className="relative w-full h-32 rounded-xl overflow-hidden bg-[#e8ebe4]/50">
+    <div className="relative w-full h-32 rounded-xl overflow-hidden bg-blue-50 dark:bg-blue-950/20">
       <svg viewBox="0 0 100 50" className="w-full h-full">
         <defs>
           <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#4a9d7c" stopOpacity="0.3" />
-            <stop offset="100%" stopColor="#4a9d7c" stopOpacity="0.1" />
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.4" />
+            <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.1" />
           </linearGradient>
         </defs>
         
@@ -85,20 +82,20 @@ function NetworkVisualization({ nodes }: { nodes: string[] }) {
               cx={node.x}
               cy={node.y}
               r="1.2"
-              fill="#4a9d7c"
+              fill="#3b82f6"
               className="animate-pulse"
             />
           </g>
         ))}
       </svg>
       
-      <div className="absolute bottom-2 left-3 right-3 flex items-center justify-between text-xs text-[#4a6d5c]">
+      <div className="absolute bottom-2 left-3 right-3 flex items-center justify-between text-xs text-blue-600 dark:text-blue-400">
         <div className="flex items-center gap-1.5">
           <Globe className="w-3 h-3" />
           <span>{nodes.length} nodes online</span>
         </div>
         <div className="flex items-center gap-3">
-          <span>{nodes.length * 72} layers</span>
+          <span>{nodes.length * 72} layers distributed</span>
         </div>
       </div>
     </div>
@@ -108,14 +105,12 @@ function NetworkVisualization({ nodes }: { nodes: string[] }) {
 function AssistantMessage({ 
   message, 
   isStreaming, 
-  currentResponse, 
-  currentReasoning,
+  currentResponse,
   isCurrentMessage
 }: { 
   message: Message;
   isStreaming: boolean;
   currentResponse: string;
-  currentReasoning: string;
   isCurrentMessage: boolean;
 }) {
   const [copied, setCopied] = useState(false);
@@ -130,51 +125,33 @@ function AssistantMessage({
     }
   };
 
-  const showReasoning = message.reasoning || (isCurrentMessage && currentReasoning);
-  const reasoningContent = isCurrentMessage ? currentReasoning : message.reasoning;
-  const displayThinkingTime = message.thinkingTime ? `${message.thinkingTime.toFixed(1)}s` : null;
-
   return (
     <div className="flex gap-3" data-testid={`message-assistant-${message.id}`}>
-      <div className="w-7 h-7 rounded-full bg-[#4a9d7c]/10 flex items-center justify-center flex-shrink-0 mt-1">
-        <Bot className="w-4 h-4 text-[#4a9d7c]" />
+      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-1">
+        <Bot className="w-4 h-4 text-primary" />
       </div>
       <div className="flex-1 space-y-2 min-w-0">
-        {showReasoning && (
-          <ReasoningDisplay
-            reasoning={reasoningContent || ""}
-            isStreaming={isStreaming && isCurrentMessage && !!currentReasoning}
-          />
-        )}
-        
-        <div className="bg-white/80 rounded-2xl px-4 py-3 shadow-sm">
+        <div className="bg-card border border-border rounded-2xl px-4 py-3">
           <StreamingMessage 
             content={message.content} 
             isStreaming={isStreaming && isCurrentMessage}
             isWaitingForResponse={!message.content && isCurrentMessage}
-            className="text-sm text-[#1a2e23]" 
+            className="text-sm text-foreground" 
           />
         </div>
         
-        <div className="flex items-center gap-2 text-xs text-[#6b7c72]">
-          {displayThinkingTime && (
-            <span className="flex items-center gap-1">
-              <Brain className="w-3 h-3" />
-              Thought for {displayThinkingTime}
-            </span>
-          )}
-          
-          {message.content && (
+        {message.content && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <button
               onClick={handleCopy}
-              className="flex items-center gap-1 hover:text-[#4a9d7c] transition-colors ml-auto"
+              className="flex items-center gap-1 hover:text-primary transition-colors"
               data-testid={`copy-message-${message.id}`}
             >
               {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
               <span>{copied ? 'Copied' : 'Copy'}</span>
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -183,11 +160,11 @@ function AssistantMessage({
 function UserMessage({ message }: { message: Message }) {
   return (
     <div className="flex gap-3 justify-end" data-testid={`message-user-${message.id}`}>
-      <div className="max-w-[75%] bg-[#4a9d7c] text-white rounded-2xl px-4 py-3 shadow-sm">
+      <div className="max-w-[75%] bg-primary text-primary-foreground rounded-2xl px-4 py-3">
         <p className="text-sm whitespace-pre-wrap">{message.content}</p>
       </div>
-      <div className="w-7 h-7 rounded-full bg-[#d4dbd6] flex items-center justify-center flex-shrink-0 mt-1">
-        <User className="w-4 h-4 text-[#5a6b5f]" />
+      <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center flex-shrink-0 mt-1">
+        <User className="w-4 h-4 text-muted-foreground" />
       </div>
     </div>
   );
@@ -197,17 +174,14 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [showNetwork, setShowNetwork] = useState(false);
   const { toast } = useToast();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const currentMessageIdRef = useRef<string | null>(null);
-  const messageStartTimesRef = useRef<Map<string, number>>(new Map());
 
   const { 
     isStreaming, 
     currentResponse, 
-    currentReasoning, 
     sendMessage: sendStreamingMessage 
   } = useStreamingChat();
 
@@ -223,14 +197,14 @@ export default function Chat() {
   }, [modelsData, selectedModel]);
 
   useEffect(() => {
-    if (currentMessageIdRef.current && (currentResponse || currentReasoning)) {
+    if (currentMessageIdRef.current && currentResponse) {
       setMessages(prev => prev.map(msg =>
         msg.id === currentMessageIdRef.current
-          ? { ...msg, content: currentResponse, reasoning: currentReasoning || undefined }
+          ? { ...msg, content: currentResponse }
           : msg
       ));
     }
-  }, [currentResponse, currentReasoning]);
+  }, [currentResponse]);
 
   const handleFileUpload = () => {
     toast({
@@ -272,25 +246,19 @@ export default function Chat() {
     
     setMessages(prev => [...prev, userMessage, assistantMessage]);
     currentMessageIdRef.current = assistantMessageId;
-    messageStartTimesRef.current.set(assistantMessageId, Date.now());
     setInput("");
     
     await sendStreamingMessage(
       selectedModel,
       allMessages,
-      { think: thinkingEnabled },
+      { think: false },
       undefined,
-      (fullResponse, fullReasoning) => {
-        const startTime = messageStartTimesRef.current.get(assistantMessageId);
-        const thinkingTime = startTime ? (Date.now() - startTime) / 1000 : undefined;
-        
+      (fullResponse) => {
         setMessages(prev => prev.map(msg =>
           msg.id === assistantMessageId
-            ? { ...msg, content: fullResponse, reasoning: fullReasoning || undefined, thinkingTime }
+            ? { ...msg, content: fullResponse }
             : msg
         ));
-        
-        messageStartTimesRef.current.delete(assistantMessageId);
         currentMessageIdRef.current = null;
       },
       (error) => {
@@ -322,26 +290,19 @@ export default function Chat() {
   const hasMessages = messages.length > 0;
 
   return (
-    <div className="flex flex-col h-full min-h-screen bg-[#f4f6f1]" data-testid="chat-page">
-      {/* Minimal header with logo */}
-      <header className="px-6 py-4">
-        <div className="flex items-center gap-2 text-[#1a2e23]">
-          <span className="text-xl font-medium tracking-tight">./</span>
-        </div>
-      </header>
-
+    <div className="flex flex-col h-full min-h-screen bg-background" data-testid="chat-page">
       <div className="flex-1 overflow-hidden flex flex-col">
         {!hasMessages ? (
           /* Welcome screen */
           <div className="flex-1 flex flex-col items-center justify-center px-6">
             <div className="w-full max-w-xl space-y-8">
               {/* Welcome heading */}
-              <h1 className="text-4xl md:text-5xl font-serif text-center text-[#1a2e23] tracking-tight">
+              <h1 className="text-4xl md:text-5xl font-semibold text-center text-foreground tracking-tight">
                 Welcome to DGON Network.
               </h1>
 
               {/* Input box */}
-              <div className="bg-white rounded-2xl shadow-sm border border-[#e0e5dc] overflow-hidden">
+              <div className="bg-card rounded-2xl shadow-sm border border-border overflow-hidden">
                 <div className="p-4">
                   <textarea
                     value={input}
@@ -354,7 +315,7 @@ export default function Chat() {
                     }}
                     placeholder="How can I help you today?"
                     disabled={!selectedModel || isStreaming}
-                    className="w-full bg-transparent resize-none border-0 focus:outline-none focus:ring-0 text-[#1a2e23] placeholder:text-[#9ca89f] text-base min-h-[24px] max-h-32"
+                    className="w-full bg-transparent resize-none border-0 focus:outline-none focus:ring-0 text-foreground placeholder:text-muted-foreground text-base min-h-[24px] max-h-32"
                     rows={1}
                     data-testid="chat-input"
                   />
@@ -366,31 +327,17 @@ export default function Chat() {
                     {/* Attachment buttons */}
                     <button
                       onClick={handleImageUpload}
-                      className="p-2 rounded-lg hover:bg-[#f4f6f1] text-[#6b7c72] transition-colors"
+                      className="p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
                       data-testid="image-upload-button"
                     >
                       <Image className="w-5 h-5" />
                     </button>
                     <button
                       onClick={handleFileUpload}
-                      className="p-2 rounded-lg hover:bg-[#f4f6f1] text-[#6b7c72] transition-colors"
+                      className="p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
                       data-testid="file-upload-button"
                     >
                       <Paperclip className="w-5 h-5" />
-                    </button>
-                    
-                    {/* Thinking toggle */}
-                    <button
-                      onClick={() => setThinkingEnabled(!thinkingEnabled)}
-                      className={`ml-1 px-3 py-1.5 rounded-full text-sm font-medium flex items-center gap-1.5 transition-all ${
-                        thinkingEnabled 
-                          ? 'bg-[#4a9d7c] text-white' 
-                          : 'border border-[#4a9d7c] text-[#4a9d7c] hover:bg-[#4a9d7c]/5'
-                      }`}
-                      data-testid="thinking-toggle"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Thinking
                     </button>
                   </div>
                   
@@ -398,23 +345,22 @@ export default function Chat() {
                     {/* Model selector */}
                     <Select value={selectedModel || ""} onValueChange={setSelectedModel}>
                       <SelectTrigger 
-                        className="h-9 border-0 bg-transparent hover:bg-[#f4f6f1] text-[#1a2e23] text-sm font-medium gap-1 px-3 shadow-none focus:ring-0"
+                        className="h-9 border-0 bg-transparent hover:bg-muted text-foreground text-sm font-medium gap-1 px-3 shadow-none focus:ring-0"
                         data-testid="model-select"
                       >
                         <SelectValue placeholder={loadingModels ? "Loading..." : "Select model"} />
                       </SelectTrigger>
-                      <SelectContent className="bg-white border-[#e0e5dc]">
+                      <SelectContent>
                         {models.map((model) => (
                           <SelectItem 
                             key={model.model} 
                             value={model.model}
-                            className="text-[#1a2e23]"
                           >
                             {model.model}
                           </SelectItem>
                         ))}
                         {models.length === 0 && (
-                          <div className="px-3 py-2 text-sm text-[#9ca89f]">
+                          <div className="px-3 py-2 text-sm text-muted-foreground">
                             No models available
                           </div>
                         )}
@@ -425,7 +371,7 @@ export default function Chat() {
                     <Button
                       onClick={handleSend}
                       disabled={!selectedModel || !input.trim() || isStreaming}
-                      className="h-9 w-9 rounded-full bg-[#4a9d7c] hover:bg-[#3d8567] text-white shadow-none disabled:opacity-40"
+                      className="h-9 w-9 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-none disabled:opacity-40"
                       size="icon"
                       data-testid="send-button"
                     >
@@ -454,7 +400,6 @@ export default function Chat() {
                       message={message}
                       isStreaming={isStreaming}
                       currentResponse={currentResponse}
-                      currentReasoning={currentReasoning}
                       isCurrentMessage={message.id === currentMessageIdRef.current}
                     />
                   )
@@ -465,7 +410,7 @@ export default function Chat() {
             {/* Chat input at bottom when in conversation */}
             <div className="px-6 pb-6 pt-2">
               <div className="max-w-2xl mx-auto">
-                <div className="bg-white rounded-2xl shadow-sm border border-[#e0e5dc] overflow-hidden">
+                <div className="bg-card rounded-2xl shadow-sm border border-border overflow-hidden">
                   <div className="p-4">
                     <textarea
                       value={input}
@@ -478,7 +423,7 @@ export default function Chat() {
                       }}
                       placeholder="Message DGON..."
                       disabled={!selectedModel || isStreaming}
-                      className="w-full bg-transparent resize-none border-0 focus:outline-none focus:ring-0 text-[#1a2e23] placeholder:text-[#9ca89f] text-sm min-h-[24px] max-h-32"
+                      className="w-full bg-transparent resize-none border-0 focus:outline-none focus:ring-0 text-foreground placeholder:text-muted-foreground text-sm min-h-[24px] max-h-32"
                       rows={1}
                       data-testid="chat-input-conversation"
                     />
@@ -488,43 +433,31 @@ export default function Chat() {
                     <div className="flex items-center gap-1">
                       <button
                         onClick={handleImageUpload}
-                        className="p-2 rounded-lg hover:bg-[#f4f6f1] text-[#6b7c72] transition-colors"
+                        className="p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
                       >
                         <Image className="w-4 h-4" />
                       </button>
                       <button
                         onClick={handleFileUpload}
-                        className="p-2 rounded-lg hover:bg-[#f4f6f1] text-[#6b7c72] transition-colors"
+                        className="p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors"
                       >
                         <Paperclip className="w-4 h-4" />
-                      </button>
-                      
-                      <button
-                        onClick={() => setThinkingEnabled(!thinkingEnabled)}
-                        className={`ml-1 px-2.5 py-1 rounded-full text-xs font-medium flex items-center gap-1 transition-all ${
-                          thinkingEnabled 
-                            ? 'bg-[#4a9d7c] text-white' 
-                            : 'border border-[#4a9d7c] text-[#4a9d7c] hover:bg-[#4a9d7c]/5'
-                        }`}
-                      >
-                        <Sparkles className="w-3 h-3" />
-                        Thinking
                       </button>
                     </div>
                     
                     <div className="flex items-center gap-2">
                       <Select value={selectedModel || ""} onValueChange={setSelectedModel}>
                         <SelectTrigger 
-                          className="h-8 border-0 bg-transparent hover:bg-[#f4f6f1] text-[#1a2e23] text-xs font-medium gap-1 px-2 shadow-none focus:ring-0"
+                          className="h-8 border-0 bg-transparent hover:bg-muted text-foreground text-xs font-medium gap-1 px-2 shadow-none focus:ring-0"
                         >
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent className="bg-white border-[#e0e5dc]">
+                        <SelectContent>
                           {models.map((model) => (
                             <SelectItem 
                               key={model.model} 
                               value={model.model}
-                              className="text-[#1a2e23] text-sm"
+                              className="text-sm"
                             >
                               {model.model}
                             </SelectItem>
@@ -535,7 +468,7 @@ export default function Chat() {
                       <Button
                         onClick={handleSend}
                         disabled={!selectedModel || !input.trim() || isStreaming}
-                        className="h-8 w-8 rounded-full bg-[#4a9d7c] hover:bg-[#3d8567] text-white shadow-none disabled:opacity-40"
+                        className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-none disabled:opacity-40"
                         size="icon"
                       >
                         {isStreaming ? (
@@ -552,7 +485,7 @@ export default function Chat() {
                 <div className="flex justify-center mt-3">
                   <button
                     onClick={() => setMessages([])}
-                    className="text-xs text-[#6b7c72] hover:text-[#4a9d7c] transition-colors"
+                    className="text-xs text-muted-foreground hover:text-primary transition-colors"
                     data-testid="new-chat-button"
                   >
                     New conversation
@@ -568,7 +501,7 @@ export default function Chat() {
           <div className="max-w-xl mx-auto">
             <button
               onClick={() => setShowNetwork(!showNetwork)}
-              className="w-full flex items-center justify-center gap-2 py-2 text-sm text-[#6b7c72] hover:text-[#4a9d7c] transition-colors"
+              className="w-full flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground hover:text-primary transition-colors"
               data-testid="explore-network-toggle"
             >
               <span>Explore serving network</span>

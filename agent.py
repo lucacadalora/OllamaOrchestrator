@@ -380,9 +380,12 @@ def poll_for_inference_requests(token):
                     full_reasoning = ""
                     response_buffer = []
                     reasoning_buffer = []
-                    # Larger buffer for HTTP mode - each request takes 150-200ms, so batch more
-                    buffer_size = 20  # ~20 tokens per HTTP request
-                    min_chars = 50  # Or flush when we have 50+ characters
+                    
+                    # FIX #2: Optimized batching thresholds per senior engineer
+                    # Flush when: ≥5 tokens OR ≥40 chars OR ≥75ms elapsed OR done
+                    buffer_size = 5  # Tokens per batch
+                    min_chars = 40   # Characters per batch  
+                    flush_interval = 0.075  # 75ms max delay
                     last_flush_time = time.time()
                     
                     with urlopen(ollama_req, timeout=300) as ollama_response:
@@ -394,6 +397,7 @@ def poll_for_inference_requests(token):
                                 # Handle reasoning models (dual stream)
                                 reasoning_chunk = chunk.get("reasoning", "")
                                 response_chunk = chunk.get("response", "")
+                                is_done = chunk.get("done", False)
                                 
                                 if reasoning_chunk:
                                     full_reasoning += reasoning_chunk
@@ -405,28 +409,30 @@ def poll_for_inference_requests(token):
                                 
                                 # Calculate total buffered characters
                                 buffered_chars = sum(len(s) for s in response_buffer) + sum(len(s) for s in reasoning_buffer)
+                                token_count = len(response_buffer) + len(reasoning_buffer)
                                 
-                                # Send chunks in batches - optimize for HTTP round-trip time
+                                # FIX #2: Optimized flush conditions
                                 current_time = time.time()
+                                time_elapsed = current_time - last_flush_time
+                                
                                 should_flush = (
-                                    len(response_buffer) >= buffer_size or
-                                    len(reasoning_buffer) >= buffer_size or
-                                    buffered_chars >= min_chars or  # Flush when enough characters accumulated
-                                    chunk.get("done", False) or  # Stream complete
-                                    (current_time - last_flush_time > 0.2 and (response_buffer or reasoning_buffer))  # 200ms max delay
+                                    token_count >= buffer_size or          # 5+ tokens
+                                    buffered_chars >= min_chars or         # 40+ characters
+                                    time_elapsed >= flush_interval or      # 75ms elapsed
+                                    is_done                                # Stream complete
                                 )
                                 
-                                if should_flush:
+                                if should_flush and (response_buffer or reasoning_buffer):
                                     # Send reasoning chunk if we have one
                                     if reasoning_buffer:
                                         combined_reasoning = "".join(reasoning_buffer)
-                                        submit_inference_chunk(token, request_id, combined_reasoning, chunk.get("done", False), content_type="reasoning")
+                                        submit_inference_chunk(token, request_id, combined_reasoning, is_done, content_type="reasoning")
                                         reasoning_buffer = []
                                     
                                     # Send response chunk if we have one
                                     if response_buffer:
                                         combined_response = "".join(response_buffer)
-                                        submit_inference_chunk(token, request_id, combined_response, chunk.get("done", False), content_type="response")
+                                        submit_inference_chunk(token, request_id, combined_response, is_done, content_type="response")
                                         response_buffer = []
                                     
                                     last_flush_time = current_time
@@ -932,30 +938,41 @@ Configuration:
             log(f"⚠ WebSocket library not installed (pip3 install websocket-client)", YELLOW)
     
     # Fallback to HTTP polling mode
-    log(f"   Mode: HTTP polling", YELLOW)
+    log(f"   Mode: HTTP polling (optimized)", YELLOW)
     log(f"   Heartbeat: every 10 seconds", BLUE)
-    log(f"   Inference polling: every 500ms", BLUE)
+    log(f"   Inference polling: every 100ms", BLUE)
     log(f"   Press Ctrl+C to stop", BLUE)
     log(f"", "")
     
     # Main loop with both heartbeat and inference polling
     last_heartbeat = time.time()
+    error_backoff = 0.1  # Start with 100ms, increase on errors
     
     try:
         while True:
-            # Send heartbeat every 10 seconds
-            if time.time() - last_heartbeat >= 10:
+            try:
+                # Send heartbeat every 10 seconds
+                if time.time() - last_heartbeat >= 10:
+                    ready, model_count, model_names = check_ollama_ready()
+                    send_heartbeat(token, ready, model_count, model_names)
+                    last_heartbeat = time.time()
+                
+                # Poll for inference requests if node is ready
                 ready, model_count, model_names = check_ollama_ready()
-                send_heartbeat(token, ready, model_count, model_names)
-                last_heartbeat = time.time()
-            
-            # Poll for inference requests if node is ready
-            ready, model_count, model_names = check_ollama_ready()
-            if ready:
-                poll_for_inference_requests(token)
-            
-            # Short sleep - 500ms for faster request pickup
-            time.sleep(0.5)
+                if ready:
+                    poll_for_inference_requests(token)
+                
+                # Reset backoff on success
+                error_backoff = 0.1
+                
+                # FIX #1: Fast polling - 100ms instead of 500ms
+                time.sleep(0.1)
+                
+            except Exception as e:
+                # Exponential backoff on errors (max 2 seconds)
+                log(f"⚠ Poll error: {e}", YELLOW)
+                time.sleep(error_backoff)
+                error_backoff = min(error_backoff * 2, 2.0)
     except KeyboardInterrupt:
         log(f"", "")
         log(f"👋 Agent stopped by user", YELLOW)

@@ -1323,77 +1323,11 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
     if (submitted) {
       console.log(`Job ${jobId} pushed to agent ${agentId} via WebSocket (instant streaming)`);
     } else {
-      console.log(`No WebSocket agents available, job ${jobId} queued for HTTP polling`);
-      
-      // FALLBACK: For HTTP polling agents, we still need to poll jobStates
-      // This only runs when no WebSocket agents are available
-      const checkInterval = setInterval(() => {
-        if (isComplete) {
-          clearInterval(checkInterval);
-          return;
-        }
-        
-        const state = jobStates.get(jobId);
-        if (!state) return;
-        
-        // Check for new content from HTTP polling agents
-        // (WebSocket tokens bypass this entirely)
-      }, 10);
-      
-      // Watch for completion from HTTP polling agents
-      const completionCheck = setInterval(async () => {
-        if (isComplete) {
-          clearInterval(completionCheck);
-          clearInterval(checkInterval);
-          return;
-        }
-        
-        try {
-          const dbRequest = await storage.getRequestById(jobId);
-          if (dbRequest && (dbRequest.status === 'completed' || dbRequest.status === 'failed')) {
-            isComplete = true;
-            clearInterval(checkInterval);
-            clearInterval(completionCheck);
-            
-            // Send any remaining content from job state
-            const state = jobStates.get(jobId);
-            if (state) {
-              if (state.transcript) {
-                res.write(`data: ${JSON.stringify({ 
-                  type: 'delta', 
-                  contentType: 'response',
-                  delta: state.transcript
-                })}\n\n`);
-              }
-              if (state.reasoning) {
-                res.write(`data: ${JSON.stringify({ 
-                  type: 'delta', 
-                  contentType: 'reasoning',
-                  delta: state.reasoning
-                })}\n\n`);
-              }
-            }
-            
-            if (dbRequest.status === 'failed') {
-              res.write(`data: ${JSON.stringify({ type: 'error', error: dbRequest.error || 'Request failed' })}\n\n`);
-            } else {
-              res.write(`data: ${JSON.stringify({ type: 'done', nodeId: dbRequest.nodeId })}\n\n`);
-            }
-            res.write('data: [DONE]\n\n');
-            res.end();
-            
-            if (cleanup) cleanup();
-          }
-        } catch (error) {
-          console.error('SSE completion check error:', error);
-        }
-      }, 50);
-      
-      // Store these for cleanup
-      req.on('close', () => {
-        clearInterval(checkInterval);
-        clearInterval(completionCheck);
-      });
+      // FIX #3: No polling loops! Events from HTTP polling path flow through agentManager
+      // HTTP agents POST to /api/v1/inference/stream which emits 'token' events
+      // HTTP agents POST to /api/v1/inference/complete which emits 'job:complete' events
+      // These events trigger onToken/onJobComplete handlers above - pure event-driven!
+      console.log(`No WebSocket agents available, job ${jobId} queued for HTTP polling (event-driven)`);
     }
     
     // Timeout after 5 minutes

@@ -713,19 +713,20 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
       const activeNodes = await storage.listNodes({ status: "active" });
       const modelsMap = new Map<string, { id: string; deviceType: string | null; city: string | null; country: string | null; hardwareMetadata: any }[]>();
       
-      // Filter out nodes that haven't sent heartbeat in last 30 seconds
+      // Filter out nodes that haven't sent heartbeat in last 60 seconds
+      // (increased from 30s to handle inference processing time)
       const now = new Date();
-      const thirtySecondsAgo = new Date(now.getTime() - 30000);
+      const sixtySecondsAgo = new Date(now.getTime() - 60000);
       
       console.log(`[Models] Checking ${activeNodes.length} active nodes at ${now.toISOString()}`);
       
       activeNodes.forEach(node => {
         const lastHeartbeat = node.lastHeartbeat ? new Date(node.lastHeartbeat) : null;
-        const isOnline = lastHeartbeat && lastHeartbeat >= thirtySecondsAgo;
+        const isOnline = lastHeartbeat && lastHeartbeat >= sixtySecondsAgo;
         
         console.log(`[Models] Node ${node.id}: lastHeartbeat=${lastHeartbeat?.toISOString() || 'never'}, isOnline=${isOnline}, models=${node.models?.join(',') || 'none'}`);
         
-        // Skip nodes that are offline (no heartbeat in last 30 seconds)
+        // Skip nodes that are offline (no heartbeat in last 60 seconds)
         if (!isOnline) {
           return;
         }
@@ -959,6 +960,9 @@ export async function registerRoutes(app: Express, sessionParser: RequestHandler
           };
           jobStates.set(jobId, jobState);
         }
+        
+        // Update node's lastHeartbeat since it's actively streaming (keeps it "online")
+        await storage.updateNodeHeartbeat(nodeId);
         
         // Handle idempotency for sequence numbers
         if (seq !== undefined && jobState.seenSeq.has(seq)) {

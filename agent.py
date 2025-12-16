@@ -381,11 +381,11 @@ def poll_for_inference_requests(token):
                     response_buffer = []
                     reasoning_buffer = []
                     
-                    # FIX #2: Optimized batching thresholds per senior engineer
-                    # Flush when: ≥5 tokens OR ≥40 chars OR ≥75ms elapsed OR done
-                    buffer_size = 5  # Tokens per batch
-                    min_chars = 40   # Characters per batch  
-                    flush_interval = 0.075  # 75ms max delay
+                    # NEAR-INSTANT STREAMING: Send tokens immediately
+                    # Flush when: ≥2 tokens OR ≥15 chars OR ≥25ms elapsed OR done
+                    buffer_size = 2   # Send every 2 tokens
+                    min_chars = 15    # Or when 15+ chars accumulated
+                    flush_interval = 0.025  # 25ms max delay - feels instant
                     last_flush_time = time.time()
                     
                     with urlopen(ollama_req, timeout=300) as ollama_response:
